@@ -1,2 +1,6 @@
-fn main() {
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    Ok(())
 }
