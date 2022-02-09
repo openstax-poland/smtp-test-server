@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::{fmt, net::{IpAddr, Ipv4Addr, Ipv6Addr}, str};
 
 pub type Result<T, E = SyntaxError> = std::result::Result<T, E>;
 
@@ -77,44 +77,90 @@ impl<'a> SliceExt<'a> for &'a [u8] {
     }
 }
 
-pub enum ReversePath<'a> {
+pub enum ReversePathRef<'a> {
     Null,
-    Mailbox(Mailbox<'a>),
+    Mailbox(MailboxRef<'a>),
 }
 
-pub fn reverse_path<'a>(line: &mut &'a [u8]) -> Result<ReversePath<'a>> {
+pub enum ReversePath {
+    Null,
+    Mailbox(Mailbox),
+}
+
+impl<'a> ReversePathRef<'a> {
+    pub fn to_owned(self) -> ReversePath {
+        match self {
+            ReversePathRef::Null => ReversePath::Null,
+            ReversePathRef::Mailbox(mb) => ReversePath::Mailbox(mb.to_owned()),
+        }
+    }
+}
+
+impl ReversePath {
+    pub fn borrow(&self) -> ReversePathRef {
+        match self {
+            ReversePath::Null => ReversePathRef::Null,
+            ReversePath::Mailbox(mb) => ReversePathRef::Mailbox(mb.borrow()),
+        }
+    }
+}
+
+pub fn reverse_path<'a>(line: &mut &'a [u8]) -> Result<ReversePathRef<'a>> {
     // Reverse-path = Path / "<>"
     if line.starts_with(b"<>") {
         line.advance(2);
-        return Ok(ReversePath::Null);
+        return Ok(ReversePathRef::Null);
     }
 
-    path(line).map(ReversePath::Mailbox)
+    path(line).map(ReversePathRef::Mailbox)
 }
 
-pub enum ForwardPath<'a> {
-    Postmaster(Option<&'a [u8]>),
-    Mailbox(Mailbox<'a>),
+pub enum ForwardPathRef<'a> {
+    Postmaster(Option<&'a str>),
+    Mailbox(MailboxRef<'a>),
 }
 
-pub fn forward_path<'a>(line: &mut &'a [u8]) -> Result<ForwardPath<'a>> {
+pub enum ForwardPath {
+    Postmaster(Option<String>),
+    Mailbox(Mailbox),
+}
+
+impl<'a> ForwardPathRef<'a> {
+    pub fn to_owned(self) -> ForwardPath {
+        match self {
+            ForwardPathRef::Postmaster(domain) => ForwardPath::Postmaster(domain.map(String::from)),
+            ForwardPathRef::Mailbox(mb) => ForwardPath::Mailbox(mb.to_owned()),
+        }
+    }
+}
+
+impl ForwardPath {
+    pub fn borrow(&self) -> ForwardPathRef {
+        match self {
+            ForwardPath::Postmaster(domain) => ForwardPathRef::Postmaster(domain.as_deref()),
+            ForwardPath::Mailbox(mb) => ForwardPathRef::Mailbox(mb.borrow()),
+        }
+    }
+}
+
+pub fn forward_path<'a>(line: &mut &'a [u8]) -> Result<ForwardPathRef<'a>> {
     if line.expect_caseless(b"<postmaster>").is_ok() {
-        return Ok(ForwardPath::Postmaster(None));
+        return Ok(ForwardPathRef::Postmaster(None));
     }
 
     let path = path(line)?;
 
-    if path.local.eq_ignore_ascii_case(b"postmaster") {
+    if path.local.eq_ignore_ascii_case("postmaster") {
         match path.location {
-            DomainOrAddr::Domain(domain) => Ok(ForwardPath::Postmaster(Some(domain))),
-            DomainOrAddr::Addr(_) => Err(SyntaxError),
+            DomainRefOrAddr::Domain(domain) => Ok(ForwardPathRef::Postmaster(Some(domain))),
+            DomainRefOrAddr::Addr(_) => Err(SyntaxError),
         }
     } else {
-        Ok(ForwardPath::Mailbox(path))
+        Ok(ForwardPathRef::Mailbox(path))
     }
 }
 
-pub fn path<'a>(line: &mut &'a [u8]) -> Result<Mailbox<'a>> {
+pub fn path<'a>(line: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
     // Path = "<" [ A-d-l ":" ] Mailbox ">"
     line.atomic(|line| {
         line.expect(b"<")?;
@@ -167,17 +213,55 @@ pub fn parameter<'a>(line: &mut &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
 
 // Argument       = Atom
 
-pub enum DomainOrAddr<'a> {
-    Domain(&'a [u8]),
+pub enum DomainRefOrAddr<'a> {
+    Domain(&'a str),
     Addr(IpAddr),
 }
 
-pub fn domain_or_address<'a>(line: &mut &'a [u8]) -> Result<DomainOrAddr<'a>> {
-    domain(line).map(DomainOrAddr::Domain)
-        .or_else(|_| address_literal(line).map(DomainOrAddr::Addr))
+pub enum DomainOrAddr {
+    Domain(String),
+    Addr(IpAddr),
 }
 
-pub fn domain<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
+impl<'a> DomainRefOrAddr<'a> {
+    pub fn to_owned(self) -> DomainOrAddr {
+        match self {
+            DomainRefOrAddr::Domain(domain) => DomainOrAddr::Domain(domain.into()),
+            DomainRefOrAddr::Addr(addr) => DomainOrAddr::Addr(addr),
+        }
+    }
+}
+
+impl DomainOrAddr {
+    pub fn borrow(&self) -> DomainRefOrAddr {
+        match self {
+            DomainOrAddr::Domain(ref domain) => DomainRefOrAddr::Domain(domain),
+            DomainOrAddr::Addr(addr) => DomainRefOrAddr::Addr(*addr),
+        }
+    }
+}
+
+impl fmt::Display for DomainRefOrAddr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DomainRefOrAddr::Domain(domain) => domain.fmt(f),
+            DomainRefOrAddr::Addr(addr) => addr.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for DomainOrAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.borrow().fmt(f)
+    }
+}
+
+pub fn domain_or_address<'a>(line: &mut &'a [u8]) -> Result<DomainRefOrAddr<'a>> {
+    domain(line).map(DomainRefOrAddr::Domain)
+        .or_else(|_| address_literal(line).map(DomainRefOrAddr::Addr))
+}
+
+pub fn domain<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
     line.atomic(|line| {
         let mut offset = 0;
 
@@ -193,6 +277,7 @@ pub fn domain<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
             // Ldh-str = *( ALPHA / DIGIT / "-" ) Let-dig
             while offset < line.len()
             && (line[offset].is_ascii_alphanumeric() || line[offset] == b'-') {
+                offset += 1;
             }
 
             if line[offset - 1] == b'-' {
@@ -205,7 +290,7 @@ pub fn domain<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
             }
         }
 
-        let domain = &line[..offset];
+        let domain = str::from_utf8(&line[..offset]).unwrap();
         line.advance(offset);
 
         Ok(domain)
@@ -348,23 +433,46 @@ pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
     })
 }
 
-pub struct Mailbox<'a> {
-    pub local: &'a [u8],
-    pub location: DomainOrAddr<'a>,
+pub struct MailboxRef<'a> {
+    pub local: &'a str,
+    pub location: DomainRefOrAddr<'a>,
 }
 
-pub fn mailbox<'a>(line: &mut &'a [u8]) -> Result<Mailbox<'a>> {
+pub struct Mailbox {
+    pub local: String,
+    pub location: DomainOrAddr,
+}
+
+impl<'a> MailboxRef<'a> {
+    pub fn to_owned(self) -> Mailbox {
+        Mailbox {
+            local: self.local.into(),
+            location: self.location.to_owned(),
+        }
+    }
+}
+
+impl Mailbox {
+    fn borrow(&self) -> MailboxRef {
+        MailboxRef {
+            local: &self.local,
+            location: self.location.borrow(),
+        }
+    }
+}
+
+pub fn mailbox<'a>(line: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
     // Mailbox    = Local-part "@" ( Domain / address-literal )
     // Local-part = Dot-string / Quoted-string
     line.atomic(|line| {
         let local = quoted_string(line).or_else(|_| dot_string(line))?;
         line.expect(b"@")?;
         let location = domain_or_address(line)?;
-        Ok(Mailbox { local, location })
+        Ok(MailboxRef { local, location })
     })
 }
 
-pub fn dot_string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
+pub fn dot_string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
     line.atomic(|line| {
         let mut cursor = *line;
 
@@ -376,14 +484,14 @@ pub fn dot_string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
         }
 
         let len = line.len() - cursor.len();
-        let string = &line[..len];
+        let string = str::from_utf8(&line[..len]).unwrap();
 
         *line = cursor;
         Ok(string)
     })
 }
 
-pub fn atom<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
+pub fn atom<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
     // Atom = 1*atext
     line.atomic(|line| {
         let text = line.take_while(|b, _| match b {
@@ -395,12 +503,12 @@ pub fn atom<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
         if text.is_empty() {
             Err(SyntaxError)
         } else {
-            Ok(text)
+            Ok(str::from_utf8(text).unwrap())
         }
     })
 }
 
-pub fn quoted_string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
+pub fn quoted_string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
     line.atomic(|line| {
         // Quoted-string = DQUOTE *QcontentSMTP DQUOTE
 
@@ -416,13 +524,13 @@ pub fn quoted_string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
                 // quoted-pairSMTP = %d92 %d32-126
                 92 if offset + 1 < line.len() => match line[offset + 1] {
                     32..=126 => offset += 2,
-                    _ => todo!("syntax error"),
+                    _ => return Err(SyntaxError),
                 },
-                _ => todo!("syntax error")
+                _ => return Err(SyntaxError)
             }
         }
 
-        let string = &line[..offset];
+        let string = str::from_utf8(&line[..offset]).unwrap();
         line.advance(offset);
 
         line.expect(b"\"")?;
@@ -431,7 +539,7 @@ pub fn quoted_string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
     })
 }
 
-pub fn string<'a>(line: &mut &'a [u8]) -> Result<&'a [u8]> {
+pub fn string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
     // String = Atom / Quoted-string
     atom(line).or_else(|_| quoted_string(line))
 }
