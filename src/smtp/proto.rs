@@ -78,9 +78,13 @@ impl Connection {
             Command::Verify(_) | Command::Expand(_) => Response::NOT_IMPLEMENTED,
             Command::Help(topic) => self.help(topic),
             Command::Noop => Response::OK_250,
-            Command::Quit => Response::new(&mut self.response, 221,
-                format!("{} Service closing transmission channel", self.name)).close(),
+            Command::Quit => self.close(),
         })
+    }
+
+    pub fn close(&mut self) -> Response {
+        Response::new(&mut self.response, 221,
+            format!("{} Service closing transmission channel", self.name)).close()
     }
 
     fn handshake(&mut self, hello: Hello) -> Response {

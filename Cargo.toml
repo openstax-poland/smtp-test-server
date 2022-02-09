@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-tokio = { version = "1.16", features = ["macros", "rt-multi-thread"] }
+env_logger = { version = "0.9", default-features = false, features = ["atty", "termcolor"] }
+log = "0.4"
+tokio = { version = "1.16", features = ["io-util", "macros", "net", "rt-multi-thread"] }

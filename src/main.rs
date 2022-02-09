@@ -4,5 +4,6 @@ mod smtp;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    Ok(())
+    env_logger::init();
+    smtp::server::start().await
 }
