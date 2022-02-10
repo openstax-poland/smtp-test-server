@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 mod smtp;
+mod syntax;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -2,7 +2,8 @@
 
 use std::{io::Write as _, fmt, net::SocketAddr};
 
-use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, SliceExt, ReversePath, ForwardPath};
+use crate::syntax::{SliceExt, SyntaxError};
+use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, ReversePath, ForwardPath};
 
 pub struct Connection {
     name: SocketAddr,
@@ -268,13 +269,13 @@ struct Recipient<'a> {
 }
 
 enum CommandParseError {
-    Syntax(syntax::SyntaxError),
+    Syntax(SyntaxError),
     /// Unknown command
     Unknown,
 }
 
-impl From<syntax::SyntaxError> for CommandParseError {
-    fn from(err: syntax::SyntaxError) -> Self {
+impl From<SyntaxError> for CommandParseError {
+    fn from(err: SyntaxError) -> Self {
         CommandParseError::Syntax(err)
     }
 }
@@ -285,7 +286,7 @@ impl<'a> Command<'a> {
             line = &line[..line.len() - 2];
         }
 
-        let command = syntax::atom(&mut line)?;
+        let command = crate::syntax::atom(&mut line)?;
 
         let command = if command.eq_ignore_ascii_case("HELO") {
             Command::parse_helo(&mut line)?

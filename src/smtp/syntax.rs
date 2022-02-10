@@ -1,81 +1,6 @@
 use std::{fmt, net::{IpAddr, Ipv4Addr, Ipv6Addr}, str};
 
-pub type Result<T, E = SyntaxError> = std::result::Result<T, E>;
-
-pub struct SyntaxError;
-
-pub trait SliceExt<'a> {
-    /// Advance this slice by `number` positions
-    fn advance(&mut self, number: usize);
-
-    /// Execute `f`, advancing `self` only if it succeeds
-    fn atomic<T: 'a>(&mut self, f: impl FnOnce(&mut &'a [u8]) -> Result<T>) -> Result<T>;
-
-    /// Return `Ok(())` and advance this slice if it begins with `needle`
-    fn expect(&mut self, needle: &[u8]) -> Result<()>;
-
-    /// Return `Ok(())` and advance this slice if it begins (case insensitive)
-    /// with `needle`
-    fn expect_caseless(&mut self, needle: &[u8]) -> Result<()>;
-
-    /// Return `Ok(())` if this slice is empty
-    fn expect_empty(&self) -> Result<()>;
-
-    /// Return longest prefix whose characters match `test`, advancing this
-    /// slice by its length
-    fn take_while(&mut self, test: impl FnMut(u8, usize) -> bool) -> &'a [u8];
-}
-
-impl<'a> SliceExt<'a> for &'a [u8] {
-    fn atomic<T: 'a>(&mut self, f: impl FnOnce(&mut &'a [u8]) -> Result<T>) -> Result<T> {
-        let mut cursor = *self;
-        let value = f(&mut cursor)?;
-        *self = cursor;
-        Ok(value)
-    }
-
-    fn advance(&mut self, by: usize) {
-        *self = &self[by..];
-    }
-
-    fn expect(&mut self, needle: &[u8]) -> Result<()> {
-        if self.starts_with(needle) {
-            self.advance(needle.len());
-            Ok(())
-        } else {
-            Err(SyntaxError)
-        }
-    }
-
-    fn expect_caseless(&mut self, needle: &[u8]) -> Result<()> {
-        if needle.len() <= self.len() && self[..needle.len()].eq_ignore_ascii_case(needle) {
-            self.advance(needle.len());
-            Ok(())
-        } else {
-            Err(SyntaxError)
-        }
-    }
-
-    fn expect_empty(&self) -> Result<()> {
-        if self.is_empty() {
-            Ok(())
-        } else {
-            Err(SyntaxError)
-        }
-    }
-
-    fn take_while(&mut self, mut test: impl FnMut(u8, usize) -> bool) -> &'a [u8] {
-        let mut offset = 0;
-
-        while offset < self.len() && test(self[offset], offset) {
-            offset += 1;
-        }
-
-        let result = &self[..offset];
-        self.advance(offset);
-        result
-    }
-}
+use crate::syntax::*;
 
 pub enum ReversePathRef<'a> {
     Null,
@@ -320,34 +245,11 @@ pub fn address_ipv4(line: &mut &[u8]) -> Result<Ipv4Addr> {
     // IPv4-address-literal = Snum 3("."  Snum)
     // Snum                 = 1*3DIGIT
     line.atomic(|line| {
-        let a = read_number(line, 10, 3)?;
-        let b = read_number(line, 10, 3)?;
-        let c = read_number(line, 10, 3)?;
-        let d = read_number(line, 10, 3)?;
+        let a = read_number(line, 10, 1, 3)?;
+        let b = read_number(line, 10, 1, 3)?;
+        let c = read_number(line, 10, 1, 3)?;
+        let d = read_number(line, 10, 1, 3)?;
         Ok(Ipv4Addr::new(a, b, c, d))
-    })
-}
-
-pub fn read_number<T>(line: &mut &[u8], radix: u32, max_digits: usize) -> Result<T>
-where
-    T: TryFrom<u32> + 'static,
-{
-    line.atomic(|line| {
-        let mut value: u32 = 0;
-        let mut count = 0;
-
-        while !line.is_empty() && count < max_digits && char::from(line[0]).is_digit(radix) {
-            value *= radix;
-            value += char::from(line[0]).to_digit(radix).unwrap();
-            count += 1;
-            line.advance(1);
-        }
-
-        if count == 0 {
-            Err(SyntaxError)
-        } else {
-            T::try_from(value).map_err(|_| SyntaxError)
-        }
     })
 }
 
@@ -389,7 +291,7 @@ pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
                     line.expect(b":")?;
                 }
 
-                read_number(line, 16, 4)
+                read_number(line, 16, 1, 4)
             }).ok();
 
             match group {
@@ -488,23 +390,6 @@ pub fn dot_string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
 
         *line = cursor;
         Ok(string)
-    })
-}
-
-pub fn atom<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
-    // Atom = 1*atext
-    line.atomic(|line| {
-        let text = line.take_while(|b, _| match b {
-            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'/' | b'=' | b'?' |
-            b'^' | b'_' | b'`' | b'{' | b'|' | b'}' | b'~' => true,
-            _ => b.is_ascii_alphanumeric(),
-        });
-
-        if text.is_empty() {
-            Err(SyntaxError)
-        } else {
-            Ok(str::from_utf8(text).unwrap())
-        }
     })
 }
 
