@@ -7,4 +7,5 @@ edition = "2021"
 anyhow = "1.0"
 env_logger = { version = "0.9", default-features = false, features = ["atty", "termcolor"] }
 log = "0.4"
+time = "0.3"
 tokio = { version = "1.16", features = ["io-util", "macros", "net", "rt-multi-thread"] }
