@@ -1,0 +1,33 @@
+.mail-list {
+    overflow-y: scroll;
+
+    table {
+        border-collapse: collapse;
+        table-layout: auto;
+    }
+
+    thead {
+        position: sticky;
+        top: 0;
+
+        background-color: white;
+        box-shadow: black 1px 1px;
+    }
+
+    th.stretch {
+        width: 100%;
+    }
+
+    tr:nth-child(2n) {
+        background-color: rgba(0, 0, 0, 0.04);
+    }
+
+    tr:hover {
+        cursor: pointer;
+        background-color: color-mod(skyblue alpha(0.4));
+    }
+
+    tr.selected {
+        font-weight: bold;
+    }
+}
