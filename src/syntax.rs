@@ -1,6 +1,6 @@
 //! Utilities for parsing
 
-use std::{str, ops, borrow::Cow, marker::PhantomData};
+use std::{str, ops, borrow::Cow, marker::PhantomData, fmt};
 use thiserror::Error;
 
 use crate::util;
@@ -252,9 +252,28 @@ impl<'a, T: Parse<'a>> ListOf<'a, T> {
     }
 }
 
+impl<T> Clone for ListOf<'_, T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        ListOf { items: self.items, separator: self.separator, _type: PhantomData }
+    }
+}
+
+impl<T> Copy for ListOf<'_, T> {
+}
+
 impl<T> Default for ListOf<'_, T> {
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+impl<T> fmt::Debug for ListOf<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct(&format!("List<{}>", std::any::type_name::<T>()))
+            .field("separator", &util::maybe_ascii(self.separator))
+            .field("items", &util::maybe_ascii(self.items))
+            .finish()
     }
 }
 

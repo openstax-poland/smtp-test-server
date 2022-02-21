@@ -88,6 +88,7 @@ fn dot_atom<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Quoted<'a>(&'a str);
 
 impl<'a> Quoted<'a> {
@@ -155,6 +156,7 @@ fn word<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
     atom(buf).map(Quoted).or_else(|_| quoted_string(buf))
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Phrase<'a>(&'a str);
 
 impl Phrase<'_> {
@@ -195,6 +197,7 @@ fn phrase<'a>(buf: &mut Buffer<'a>) -> Result<Phrase<'a>> {
     Ok(Phrase(value))
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Folded<'a>(&'a str);
 
 impl<'a> Folded<'a> {
@@ -241,6 +244,7 @@ fn unstructured<'a>(buf: &mut Buffer<'a>) -> Result<Folded<'a>> {
 
 // ------------------------------------------------------ 3.3. Date and Time ---
 
+#[derive(Clone, Copy, Debug)]
 pub enum AnyDateTime {
     Local(PrimitiveDateTime),
     Offset(OffsetDateTime)
@@ -481,6 +485,7 @@ pub fn address<'a>(buf: &mut Buffer<'a>) -> Result<AddressOrGroupRef<'a>> {
         .or_else(|_| group(buf).map(AddressOrGroupRef::Group))
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct MailboxRef<'a> {
     pub name: Option<Phrase<'a>>,
     pub address: AddressRef<'a>,
@@ -570,6 +575,7 @@ pub fn group_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
 
 // -------------------------------------------------------- 3.4.1. Addr-Spec ---
 
+#[derive(Clone, Copy, Debug)]
 pub struct AddressRef<'a> {
     pub local: Quoted<'a>,
     pub domain: &'a str,
@@ -629,6 +635,7 @@ pub fn domain_literal<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
 
 // -------------------------------------------------- 3.6. Field Definitions ---
 
+#[derive(Clone, Copy, Debug)]
 pub enum Header<'a> {
     OriginationDate(AnyDateTime),
     /// Author(s) of the message
@@ -777,6 +784,7 @@ fn bcc<'a>(buf: &mut Buffer<'a>) -> AddressOrGroupList<'a> {
     }).unwrap_or(AddressOrGroupList::empty())
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct MessageIdRef<'a>(pub &'a str);
 
 impl<'a> Parse<'a> for MessageIdRef<'a> {
@@ -829,6 +837,7 @@ fn keywords<'a>(buf: &mut Buffer<'a>) -> Result<KeywordList<'a>> {
 
 // ----------------------------------------------------- 3.6.7. Trace Fields ---
 
+#[derive(Clone, Copy, Debug)]
 pub enum PathRef<'a> {
     Null,
     Address(AddressRef<'a>),
@@ -855,6 +864,7 @@ fn path<'a>(buf: &mut Buffer<'a>) -> Result<PathRef<'a>> {
     }))
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Received<'a> {
     pub tokens: ListOf<'a, ReceivedToken<'a>>,
     pub date: AnyDateTime,
