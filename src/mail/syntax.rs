@@ -1,41 +1,7 @@
-use std::{str, marker::PhantomData, borrow::Cow};
+use std::{str, borrow::Cow};
 use time::{Weekday, Month, UtcOffset, Time, Date, OffsetDateTime, PrimitiveDateTime};
 
 use crate::syntax::*;
-
-/// List of parseable items separated by commas
-pub struct ListOf<'a, T> {
-    items: &'a [u8],
-    separator: &'static [u8],
-    _type: PhantomData<&'a [T]>,
-}
-
-impl<'a, T: Parse<'a>> ListOf<'a, T> {
-    fn new(separator: &'static [u8], items: &'a [u8]) -> Self {
-        ListOf { items, separator, _type: PhantomData }
-    }
-
-    pub fn iter<'c>(&'c self) -> impl Iterator<Item = T> + 'c
-    where
-        'c: 'a,
-    {
-        let mut items = Buffer::new(self.items);
-        let mut first = true;
-        std::iter::from_fn(move || {
-            if items.is_empty() {
-                return None;
-            }
-
-            if !first {
-                items.expect(self.separator).expect("invalid pre-parsed string");
-            } else {
-                first = false;
-            }
-
-            Some(T::parse(&mut items).expect("invalid pre-parsed string"))
-        })
-    }
-}
 
 /// Folding white space
 fn fws(buf: &mut Buffer) -> Result<()> {
@@ -482,7 +448,7 @@ pub fn zone(buf: &mut Buffer) -> Result<Option<UtcOffset>> {
         buf.advance(1);
 
         let hours: i32 = read_number(buf, 10, 2, 2)?;
-        let minutes: i32 = read_number(buf, 10, 4, 4)?;
+        let minutes: i32 = read_number(buf, 10, 2, 2)?;
 
         if !positive && hours == 0 && minutes == 0 {
             Ok(None)
@@ -565,7 +531,7 @@ pub fn group<'a>(buf: &mut Buffer<'a>) -> Result<GroupRef<'a>> {
     buf.atomic(|buf| {
         let name = display_name(buf)?;
         buf.expect(b":")?;
-        let members = buf.maybe(group_list).unwrap_or(MailboxList::new(b"", b""));
+        let members = buf.maybe(group_list).unwrap_or(MailboxList::empty());
         buf.expect(b";")?;
         buf.maybe(cfws);
         Ok(GroupRef { name, members })
@@ -581,36 +547,14 @@ pub type MailboxList<'a> = ListOf<'a, MailboxRef<'a>>;
 
 pub fn mailbox_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
     // mailbox-list = (mailbox *("," mailbox)) / obs-mbox-list
-
-    let mut cursor = *buf;
-    mailbox(&mut cursor)?;
-
-    while cursor.expect(b",").is_ok() {
-        mailbox(&mut cursor)?;
-    }
-
-    let length = buf.len() - cursor.len();
-    let value = buf.take(length);
-
-    Ok(ListOf::new(b",", value))
+    buf.list_of(1, usize::MAX, b",")
 }
 
 pub type AddressOrGroupList<'a> = ListOf<'a, AddressOrGroupRef<'a>>;
 
 pub fn address_list<'a>(buf: &mut Buffer<'a>) -> Result<AddressOrGroupList<'a>> {
     // address-list = (address *("," address)) / obs-addr-list
-
-    let mut cursor = *buf;
-    address(&mut cursor)?;
-
-    while cursor.expect(b",").is_ok() {
-        address(&mut cursor)?;
-    }
-
-    let length = buf.len() - cursor.len();
-    let value = buf.take(length);
-
-    Ok(ListOf::new(b",", value))
+    buf.list_of(1, usize::MAX, b",")
 }
 
 pub fn group_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
@@ -619,7 +563,7 @@ pub fn group_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
         Ok(value) => Ok(value),
         Err(_) => {
             cfws(buf)?;
-            Ok(MailboxList::new(b"", b""))
+            Ok(MailboxList::empty())
         }
     }
 }
@@ -755,7 +699,7 @@ pub enum Header<'a> {
     },
 }
 
-pub fn filed<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
+pub fn field<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
     buf.atomic(|buf| {
         let name = field_name(buf)?;
         buf.expect(b":")?;
@@ -798,6 +742,8 @@ pub fn filed<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
             Header::ResentCarbonCopy(address_list(buf)?)
         } else if name.eq_ignore_ascii_case("Resent-Bcc") {
             Header::ResentBlindCarbonCopy(bcc(buf))
+        } else if name.eq_ignore_ascii_case("Resent-Message-Id") {
+            Header::ResentMessageId(msg_id(buf)?)
         } else if name.eq_ignore_ascii_case("Return-Path") {
             Header::ReturnPath(path(buf)?)
         } else if name.eq_ignore_ascii_case("Received") {
@@ -826,9 +772,9 @@ fn bcc<'a>(buf: &mut Buffer<'a>) -> AddressOrGroupList<'a> {
     buf.maybe(|buf| {
         address_list(buf).or_else(|_| {
             cfws(buf)?;
-            Ok(AddressOrGroupList::new(b"", b""))
+            Ok(AddressOrGroupList::empty())
         })
-    }).unwrap_or(AddressOrGroupList::new(b"", b""))
+    }).unwrap_or(AddressOrGroupList::empty())
 }
 
 pub struct MessageIdRef<'a>(pub &'a str);
@@ -871,27 +817,14 @@ fn no_fold_literal<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
 pub type MessageIdList<'a> = ListOf<'a, MessageIdRef<'a>>;
 
 fn msg_id_list<'a>(buf: &mut Buffer<'a>) -> Result<MessageIdList<'a>> {
-    buf.take_matching(|buf| {
-        msg_id(buf)?;
-        while msg_id(buf).is_ok() {}
-        Ok(())
-    }).map(|list| MessageIdList::new(b"", list))
+    buf.list_of(1, usize::MAX, b"")
 }
 
 pub type KeywordList<'a> = ListOf<'a, Phrase<'a>>;
 
 fn keywords<'a>(buf: &mut Buffer<'a>) -> Result<KeywordList<'a>> {
     // keywords = phrase *("," phrase)
-    let value = buf.take_matching(|buf| {
-        phrase(buf)?;
-
-        while buf.expect(b",").is_ok() {
-            phrase(buf)?;
-        }
-
-        Ok(())
-    })?;
-    Ok(KeywordList::new(b",", value))
+    buf.list_of(1, usize::MAX, b",")
 }
 
 // ----------------------------------------------------- 3.6.7. Trace Fields ---
@@ -927,6 +860,12 @@ pub struct Received<'a> {
     pub date: AnyDateTime,
 }
 
+impl<'a> Parse<'a> for Received<'a> {
+    fn parse(buf: &mut Buffer<'a>) -> Result<Self> {
+        received(buf)
+    }
+}
+
 pub fn received<'a>(buf: &mut Buffer<'a>) -> Result<Received<'a>> {
     // received = "Received:" *received-token ";" date-time CRLF
     buf.atomic(|buf| {
@@ -941,12 +880,7 @@ fn received_value<'a>(buf: &mut Buffer<'a>) -> Result<Received<'a>> {
     // received       = *received-token ";" date-time
     // received-token = word / angle-addr / addr-spec / domain
     buf.atomic(|buf| {
-        let mut cursor = *buf;
-        while !cursor.is_empty() && !cursor.starts_with(b";") {
-            received_token(&mut cursor)?;
-        }
-        let len = buf.len() - cursor.len();
-        let tokens = ListOf::new(b"", buf.take(len));
+        let tokens = buf.list_of(0, usize::MAX, b"")?;
         buf.expect(b";")?;
         let date = date_time(buf)?;
         Ok(Received { tokens, date })

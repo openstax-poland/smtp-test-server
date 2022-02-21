@@ -1,6 +1,6 @@
 //! Utilities for parsing
 
-use std::{str, ops, borrow::Cow};
+use std::{str, ops, borrow::Cow, marker::PhantomData};
 use thiserror::Error;
 
 use crate::util;
@@ -153,6 +153,26 @@ impl<'a> Buffer<'a> {
     pub fn maybe<T: 'a>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Option<T> {
         self.atomic(f).ok()
     }
+
+    pub fn list_of<T: Parse<'a>>(&mut self, min: usize, max: usize, separator: &'static [u8])
+    -> Result<ListOf<'a, T>> {
+        let items = self.take_matching(|slf| {
+            let mut count = 0;
+
+            while let Some(_) = slf.maybe(T::parse) {
+                count += 1;
+            }
+
+            if count < min {
+                slf.error(format!("expected at least {min} elements"))
+            } else if count > max {
+                slf.error(format!("expected at most {max} elements"))
+            } else {
+                Ok(())
+            }
+        })?;
+        Ok(ListOf::new(separator, items))
+    }
 }
 
 impl ops::Deref for Buffer<'_> {
@@ -186,6 +206,56 @@ where
             T::try_from(value).map_err(|err| Custom(err.to_string().into()).at(buf.offset))
         }
     })
+}
+
+/// List of parseable items separated by commas
+pub struct ListOf<'a, T> {
+    items: &'a [u8],
+    separator: &'static [u8],
+    _type: PhantomData<&'a [T]>,
+}
+
+impl<'a, T> ListOf<'a, T> {
+    fn new(separator: &'static [u8], items: &'a [u8]) -> Self {
+        ListOf { items, separator, _type: PhantomData }
+    }
+
+    pub fn empty() -> Self {
+        ListOf::new(b"", b"")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl<'a, T: Parse<'a>> ListOf<'a, T> {
+    pub fn iter<'c>(&'c self) -> impl Iterator<Item = T> + 'c
+    where
+        'c: 'a,
+    {
+        let mut items = Buffer::new(self.items);
+        let mut first = true;
+        std::iter::from_fn(move || {
+            if items.is_empty() {
+                return None;
+            }
+
+            if !first {
+                items.expect(self.separator).expect("invalid pre-parsed string");
+            } else {
+                first = false;
+            }
+
+            Some(T::parse(&mut items).expect("invalid pre-parsed string"))
+        })
+    }
+}
+
+impl<T> Default for ListOf<'_, T> {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 // ---------------------------------------------------------------- RFC 5234 ---
