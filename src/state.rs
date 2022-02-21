@@ -25,6 +25,14 @@ impl State {
         })
     }
 
+    pub async fn messages(&self) -> impl std::ops::Deref<Target = HashMap<String, Arc<Message>>> + '_ {
+        self.messages.read().await
+    }
+
+    pub async fn get_message(&self, id: &str) -> Option<Arc<Message>> {
+        self.messages.read().await.get(id).cloned()
+    }
+
     pub async fn submit_message(&self, message: &[u8]) -> Result<(), SubmitMessageError> {
         let message = mail::parse(message)?;
 
