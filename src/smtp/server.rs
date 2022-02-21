@@ -1,7 +1,7 @@
 //! SMTP server
 
 use anyhow::{Context, Result};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
 use crate::util;
@@ -9,10 +9,24 @@ use super::proto::{Connection, Response};
 
 pub async fn start() -> Result<()> {
     // IPv4 TCP listener on port 587 (per RFC 6409)
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 587))
+    let listener_ipv4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 587))
         .await
         .context("could not bind TCP socket on localhost:587")?;
 
+    // IPv6 TCP listener on port 587 (per RFC 6409)
+    let listener_ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 587))
+        .await
+        .context("could not bind TCP socket on localhost:587")?;
+
+    tokio::try_join!(
+        handle_listener(listener_ipv4),
+        handle_listener(listener_ipv6),
+    )?;
+
+    Ok(())
+}
+
+async fn handle_listener(listener: TcpListener) -> Result<()> {
     loop {
         let (socket, addr) = listener.accept()
             .await
