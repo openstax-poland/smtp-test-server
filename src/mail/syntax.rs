@@ -6,20 +6,20 @@ use crate::syntax::*;
 /// List of parseable items separated by commas
 pub struct ListOf<'a, T> {
     items: &'a [u8],
-    separator: &'a [u8],
+    separator: &'static [u8],
     _type: PhantomData<&'a [T]>,
 }
 
 impl<'a, T: Parse<'a>> ListOf<'a, T> {
-    fn new(separator: &'a [u8], items: &'a [u8]) -> Self {
+    fn new(separator: &'static [u8], items: &'a [u8]) -> Self {
         ListOf { items, separator, _type: PhantomData }
     }
 
-    fn iter<'c>(&'c self) -> impl Iterator<Item = T> + 'c
+    pub fn iter<'c>(&'c self) -> impl Iterator<Item = T> + 'c
     where
         'c: 'a,
     {
-        let mut items = self.items;
+        let mut items = Buffer::new(self.items);
         let mut first = true;
         std::iter::from_fn(move || {
             if items.is_empty() {
@@ -38,7 +38,7 @@ impl<'a, T: Parse<'a>> ListOf<'a, T> {
 }
 
 /// Folding white space
-fn fws(buf: &mut &[u8]) -> Result<()> {
+fn fws(buf: &mut Buffer) -> Result<()> {
     // FWS = ([*WSP CRLF] 1*WSP) / obs-FWS
 
     let before = buf.take_while(|c, _| is_wsp(c));
@@ -49,13 +49,13 @@ fn fws(buf: &mut &[u8]) -> Result<()> {
     }).is_ok();
 
     if before.is_empty() && !after {
-        Err(SyntaxError)
+        buf.error("expected one of ' ' or '\\t'")
     } else {
         Ok(())
     }
 }
 
-fn comment(buf: &mut &[u8]) -> Result<()> {
+fn comment(buf: &mut Buffer) -> Result<()> {
     // comment = "(" *([FWS] ccontent) [FWS] ")"
     buf.atomic(|buf| {
         buf.expect(b"(")?;
@@ -69,9 +69,9 @@ fn comment(buf: &mut &[u8]) -> Result<()> {
                 // quoted-pair = ("\" (VCHAR / WSP)) / obs-qp
                 b'\\' if buf.len() >= 2 => match buf[1] {
                     c if is_vchar(c) || is_wsp(c) => buf.advance(2),
-                    _ => return Err(SyntaxError),
+                    _ => return buf.error("invalid escape sequence"),
                 },
-                _ => return Err(SyntaxError),
+                _ => return buf.error("illegal character in comment"),
             }
 
             buf.maybe(fws);
@@ -83,25 +83,26 @@ fn comment(buf: &mut &[u8]) -> Result<()> {
 }
 
 /// Comment or folding white space
-fn cfws(buf: &mut &[u8]) -> Result<()> {
+fn cfws(buf: &mut Buffer) -> Result<()> {
     // CFWS = (1*([FWS] comment) [FWS]) / FWS
-    buf.atomic(|buf| {
-        let before = buf.len();
+    let value = buf.take_matching(|buf| {
         buf.maybe(fws);
 
         while comment(buf).is_ok() {
             buf.maybe(fws);
         }
 
-        if before > buf.len() {
-            Ok(())
-        } else {
-            Err(SyntaxError)
-        }
-    })
+        Ok(())
+    })?;
+
+    if value.is_empty() {
+        buf.error("expected one of ' ', '\\t', or comment")
+    } else {
+        Ok(())
+    }
 }
 
-fn atom<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
+fn atom<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // atom = [CFWS] 1*atext [CFWS]
     buf.atomic(|buf| {
         buf.maybe(cfws);
@@ -111,7 +112,7 @@ fn atom<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
     })
 }
 
-fn dot_atom<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
+fn dot_atom<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // dot-atom = [CFWS] dot-atom-text [CFWS]
     buf.atomic(|buf| {
         buf.maybe(cfws);
@@ -148,7 +149,7 @@ impl<'a> Quoted<'a> {
     }
 }
 
-fn quoted_string<'a>(buf: &mut &'a [u8]) -> Result<Quoted<'a>> {
+fn quoted_string<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
     // quoted-string = [CFWS]
     //                 DQUOTE *([FWS] qcontent) [FWS] DQUOTE
     //                 [CFWS]
@@ -167,9 +168,9 @@ fn quoted_string<'a>(buf: &mut &'a [u8]) -> Result<Quoted<'a>> {
                 33 | 35..=91 | 93..=126 => buf.advance(1),
                 b'\\' if cursor.len() >= 2 => match buf[1] {
                     0x21..=0x7e | b' ' | b'\t' => buf.advance(2),
-                    _ => return Err(SyntaxError),
+                    _ => return buf.error("invalid escape sequence"),
                 },
-                _ => return Err(SyntaxError),
+                _ => return buf.error("illegal character in quoted string"),
             }
         }
 
@@ -183,7 +184,7 @@ fn quoted_string<'a>(buf: &mut &'a [u8]) -> Result<Quoted<'a>> {
     })
 }
 
-fn word<'a>(buf: &mut &'a [u8]) -> Result<Quoted<'a>> {
+fn word<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
     // word = atom / quoted-string
     atom(buf).map(Quoted).or_else(|_| quoted_string(buf))
 }
@@ -193,7 +194,7 @@ pub struct Phrase<'a>(&'a str);
 impl Phrase<'_> {
     pub fn unquote(&self) -> String {
         let mut result = String::new();
-        let mut rest = self.0.as_bytes();
+        let mut rest = Buffer::new(self.0.as_bytes());
 
         while !rest.is_empty() {
             let word = word(&mut rest).expect("invalid pre-parsed string");
@@ -205,12 +206,12 @@ impl Phrase<'_> {
 }
 
 impl<'a> Parse<'a> for Phrase<'a> {
-    fn parse(from: &mut &'a [u8]) -> Result<Self> {
+    fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         phrase(from)
     }
 }
 
-fn phrase<'a>(buf: &mut &'a [u8]) -> Result<Phrase<'a>> {
+fn phrase<'a>(buf: &mut Buffer<'a>) -> Result<Phrase<'a>> {
     // phrase = 1*word / obs-phrase
 
     let mut cursor = *buf;
@@ -228,7 +229,30 @@ fn phrase<'a>(buf: &mut &'a [u8]) -> Result<Phrase<'a>> {
     Ok(Phrase(value))
 }
 
-fn unstructured<'a>(buf: &mut &'a [u8]) -> Result<&'a [u8]> {
+pub struct Folded<'a>(&'a str);
+
+impl<'a> Folded<'a> {
+    pub fn unfold(&self) -> Cow<'a, str> {
+        let mut result = String::new();
+        let mut rest = self.0;
+
+        while let Some(inx) = rest.find('\r') {
+            if inx > 0 {
+                result.push_str(&rest[..inx]);
+            }
+
+            rest = &rest[2..];
+        }
+
+        if result.is_empty() {
+            Cow::from(self.0)
+        } else {
+            Cow::from(result)
+        }
+    }
+}
+
+fn unstructured<'a>(buf: &mut Buffer<'a>) -> Result<Folded<'a>> {
     // unstructured = (*([FWS] VCHAR) *WSP) / obs-unstruct
 
     let mut cursor = *buf;
@@ -242,11 +266,11 @@ fn unstructured<'a>(buf: &mut &'a [u8]) -> Result<&'a [u8]> {
     }
 
     let length = buf.len() - cursor.len();
-    let value = buf.take(length);
+    let value = str::from_utf8(buf.take(length)).unwrap();
 
     while wsp(buf).is_ok() {}
 
-    Ok(value)
+    Ok(Folded(value))
 }
 
 // ------------------------------------------------------ 3.3. Date and Time ---
@@ -256,7 +280,7 @@ pub enum AnyDateTime {
     Offset(OffsetDateTime)
 }
 
-pub fn date_time(buf: &mut &[u8]) -> Result<AnyDateTime> {
+pub fn date_time(buf: &mut Buffer) -> Result<AnyDateTime> {
     // date-time = [ day-of-week "," ] date time [CFWS]
     buf.atomic(|buf| {
         let day_of_week = buf.maybe(|buf| {
@@ -270,7 +294,7 @@ pub fn date_time(buf: &mut &[u8]) -> Result<AnyDateTime> {
 
         if let Some(day_of_week) = day_of_week {
             if day_of_week != date.weekday() {
-                return Err(SyntaxError);
+                return buf.error("mismatch between day number and name");
             }
         }
 
@@ -284,7 +308,7 @@ pub fn date_time(buf: &mut &[u8]) -> Result<AnyDateTime> {
     })
 }
 
-pub fn day_of_week(buf: &mut &[u8]) -> Result<Weekday> {
+pub fn day_of_week(buf: &mut Buffer) -> Result<Weekday> {
     // day-of-week = ([FWS] day-name) / obs-day-of-week
     buf.atomic(|buf| {
         buf.maybe(fws);
@@ -292,7 +316,7 @@ pub fn day_of_week(buf: &mut &[u8]) -> Result<Weekday> {
     })
 }
 
-pub fn day_name(buf: &mut &[u8]) -> Result<Weekday> {
+pub fn day_name(buf: &mut Buffer) -> Result<Weekday> {
     // day-name = "Mon" / "Tue" / "Wed" / "Thu" / "Fri" / "Sat" / "Sun"
     if buf.expect_caseless(b"Mon").is_ok() {
         Ok(Weekday::Monday)
@@ -309,22 +333,24 @@ pub fn day_name(buf: &mut &[u8]) -> Result<Weekday> {
     } else if buf.expect_caseless(b"Sun").is_ok() {
         Ok(Weekday::Sunday)
     } else {
-        Err(SyntaxError)
+        buf.error("illegal day nme")
     }
 }
 
-pub fn date(buf: &mut &[u8]) -> Result<Date> {
+pub fn date(buf: &mut Buffer) -> Result<Date> {
     // date = day month year
     buf.atomic(|buf| {
+        let offset = buf.offset();
         let day = day(buf)?;
         let month = month(buf)?;
         let year = year(buf)?;
 
-        Date::from_calendar_date(year, month, day).map_err(|_| SyntaxError)
+        Date::from_calendar_date(year, month, day)
+            .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
     })
 }
 
-pub fn day(buf: &mut &[u8]) -> Result<u8> {
+pub fn day(buf: &mut Buffer) -> Result<u8> {
     // day = ([FWS] 1*2DIGIT FWS) / obs-day
     buf.atomic(|buf| {
         fws(buf)?;
@@ -334,7 +360,7 @@ pub fn day(buf: &mut &[u8]) -> Result<u8> {
     })
 }
 
-pub fn month(buf: &mut &[u8]) -> Result<Month> {
+pub fn month(buf: &mut Buffer) -> Result<Month> {
     // month = "Jan" / "Feb" / "Mar" / "Apr" /
     //         "May" / "Jun" / "Jul" / "Aug" /
     //         "Sep" / "Oct" / "Nov" / "Dec"
@@ -363,11 +389,11 @@ pub fn month(buf: &mut &[u8]) -> Result<Month> {
     } else if buf.expect_caseless(b"Dec").is_ok() {
         Ok(Month::December)
     } else {
-        Err(SyntaxError)
+        buf.error("invalid month name")
     }
 }
 
-pub fn year(buf: &mut &[u8]) -> Result<i32> {
+pub fn year(buf: &mut Buffer) -> Result<i32> {
     // year = (FWS 4*DIGIT FWS) / obs-year
     buf.atomic(|buf| {
         fws(buf)?;
@@ -375,7 +401,7 @@ pub fn year(buf: &mut &[u8]) -> Result<i32> {
         let year = read_number(buf, 10, 4, 4)?;
 
         if year < 1900 {
-            return Err(SyntaxError);
+            return buf.error("years before 1900 are not allowed");
         }
 
         fws(buf)?;
@@ -393,7 +419,7 @@ pub struct OffsetTime {
     pub offset: UtcOffset,
 }
 
-pub fn time(buf: &mut &[u8]) -> Result<AnyTime> {
+pub fn time(buf: &mut Buffer) -> Result<AnyTime> {
     // time = time-of-day zone
     buf.atomic(|buf| {
         let time = time_of_day(buf)?;
@@ -406,9 +432,10 @@ pub fn time(buf: &mut &[u8]) -> Result<AnyTime> {
     })
 }
 
-pub fn time_of_day(buf: &mut &[u8]) -> Result<Time> {
+pub fn time_of_day(buf: &mut Buffer) -> Result<Time> {
     // time-of-day = hour ":" minute [ ":" second ]
     buf.atomic(|buf| {
+        let offset = buf.offset();
         let hour = hour(buf)?;
         buf.expect(b":")?;
         let minute = minute(buf)?;
@@ -417,38 +444,40 @@ pub fn time_of_day(buf: &mut &[u8]) -> Result<Time> {
             second(buf)
         }).unwrap_or(0);
 
-        Time::from_hms(hour, minute, second).map_err(|_| SyntaxError)
+        Time::from_hms(hour, minute, second)
+            .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
     })
 }
 
-pub fn hour(buf: &mut &[u8]) -> Result<u8> {
+pub fn hour(buf: &mut Buffer) -> Result<u8> {
     // hour = 2DIGIT / obs-hour
     read_number(buf, 10, 2, 2)
 }
 
-pub fn minute(buf: &mut &[u8]) -> Result<u8> {
+pub fn minute(buf: &mut Buffer) -> Result<u8> {
     // minute = 2DIGIT / obs-minute
     read_number(buf, 10, 2, 2)
 }
 
-pub fn second(buf: &mut &[u8]) -> Result<u8> {
+pub fn second(buf: &mut Buffer) -> Result<u8> {
     // second = 2DIGIT / obs-second
     read_number(buf, 10, 2, 2)
 }
 
-pub fn zone(buf: &mut &[u8]) -> Result<Option<UtcOffset>> {
+pub fn zone(buf: &mut Buffer) -> Result<Option<UtcOffset>> {
     // zone = (FWS ( "+" / "-" ) 4DIGIT) / obs-zone
     buf.atomic(|buf| {
         fws(buf)?;
 
         if buf.is_empty() {
-            return Err(SyntaxError);
+            return buf.error("expected tieme zone");
         }
 
+        let offset = buf.offset();
         let positive = match buf[0] {
             b'+' => true,
             b'-' => false,
-            _ => return Err(SyntaxError),
+            _ => return buf.error("expected one of '+' or '-'"),
         };
         buf.advance(1);
 
@@ -460,7 +489,9 @@ pub fn zone(buf: &mut &[u8]) -> Result<Option<UtcOffset>> {
         } else {
             let seconds = (hours * 60 + minutes) * 60;
             let seconds = if positive { seconds } else { -seconds };
-            UtcOffset::from_whole_seconds(seconds).map(Some).map_err(|_| SyntaxError)
+            UtcOffset::from_whole_seconds(seconds)
+                .map(Some)
+                .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
         }
     })
 }
@@ -473,12 +504,12 @@ pub enum AddressOrGroupRef<'a> {
 }
 
 impl<'a> Parse<'a> for AddressOrGroupRef<'a> {
-    fn parse(from: &mut &'a [u8]) -> Result<Self> {
+    fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         address(from)
     }
 }
 
-pub fn address<'a>(buf: &mut &'a [u8]) -> Result<AddressOrGroupRef<'a>> {
+pub fn address<'a>(buf: &mut Buffer<'a>) -> Result<AddressOrGroupRef<'a>> {
     // address = mailbox / group
     mailbox(buf).map(AddressOrGroupRef::Mailbox)
         .or_else(|_| group(buf).map(AddressOrGroupRef::Group))
@@ -490,12 +521,12 @@ pub struct MailboxRef<'a> {
 }
 
 impl<'a> Parse<'a> for MailboxRef<'a> {
-    fn parse(from: &mut &'a [u8]) -> Result<Self> {
+    fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         mailbox(from)
     }
 }
 
-pub fn mailbox<'a>(buf: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
+pub fn mailbox<'a>(buf: &mut Buffer<'a>) -> Result<MailboxRef<'a>> {
     // mailbox = name-addr / addr-spec
     name_addr(buf).or_else(|_| {
         let address = addr_spec(buf)?;
@@ -503,7 +534,7 @@ pub fn mailbox<'a>(buf: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
     })
 }
 
-pub fn name_addr<'a>(buf: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
+pub fn name_addr<'a>(buf: &mut Buffer<'a>) -> Result<MailboxRef<'a>> {
     // name-addr = [display-name] angle-addr
     buf.atomic(|buf| {
         let name = buf.maybe(display_name);
@@ -512,7 +543,7 @@ pub fn name_addr<'a>(buf: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
     })
 }
 
-pub fn angle_addr<'a>(buf: &mut &'a [u8]) -> Result<AddressRef<'a>> {
+pub fn angle_addr<'a>(buf: &mut Buffer<'a>) -> Result<AddressRef<'a>> {
     // angle-addr = [CFWS] "<" addr-spec ">" [CFWS] / obs-angle-addr
     buf.atomic(|buf| {
         buf.maybe(cfws);
@@ -529,7 +560,7 @@ pub struct GroupRef<'a> {
     pub members: MailboxList<'a>,
 }
 
-pub fn group<'a>(buf: &mut &'a [u8]) -> Result<GroupRef<'a>> {
+pub fn group<'a>(buf: &mut Buffer<'a>) -> Result<GroupRef<'a>> {
     // group = display-name ":" [group-list] ";" [CFWS]
     buf.atomic(|buf| {
         let name = display_name(buf)?;
@@ -541,14 +572,14 @@ pub fn group<'a>(buf: &mut &'a [u8]) -> Result<GroupRef<'a>> {
     })
 }
 
-pub fn display_name<'a>(buf: &mut &'a [u8]) -> Result<Phrase<'a>> {
+pub fn display_name<'a>(buf: &mut Buffer<'a>) -> Result<Phrase<'a>> {
     // display-name = phrase
     phrase(buf)
 }
 
 pub type MailboxList<'a> = ListOf<'a, MailboxRef<'a>>;
 
-pub fn mailbox_list<'a>(buf: &mut &'a [u8]) -> Result<MailboxList<'a>> {
+pub fn mailbox_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
     // mailbox-list = (mailbox *("," mailbox)) / obs-mbox-list
 
     let mut cursor = *buf;
@@ -566,7 +597,7 @@ pub fn mailbox_list<'a>(buf: &mut &'a [u8]) -> Result<MailboxList<'a>> {
 
 pub type AddressOrGroupList<'a> = ListOf<'a, AddressOrGroupRef<'a>>;
 
-pub fn address_list<'a>(buf: &mut &'a [u8]) -> Result<AddressOrGroupList<'a>> {
+pub fn address_list<'a>(buf: &mut Buffer<'a>) -> Result<AddressOrGroupList<'a>> {
     // address-list = (address *("," address)) / obs-addr-list
 
     let mut cursor = *buf;
@@ -582,7 +613,7 @@ pub fn address_list<'a>(buf: &mut &'a [u8]) -> Result<AddressOrGroupList<'a>> {
     Ok(ListOf::new(b",", value))
 }
 
-pub fn group_list<'a>(buf: &mut &'a [u8]) -> Result<MailboxList<'a>> {
+pub fn group_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
     // group-list = mailbox-list / CFWS / obs-group-list
     match mailbox_list(buf) {
         Ok(value) => Ok(value),
@@ -600,7 +631,7 @@ pub struct AddressRef<'a> {
     pub domain: &'a str,
 }
 
-pub fn addr_spec<'a>(buf: &mut &'a [u8]) -> Result<AddressRef<'a>> {
+pub fn addr_spec<'a>(buf: &mut Buffer<'a>) -> Result<AddressRef<'a>> {
     // addr-spec = local-part "@" domain
     buf.atomic(|buf| {
         let local = local_part(buf)?;
@@ -610,12 +641,12 @@ pub fn addr_spec<'a>(buf: &mut &'a [u8]) -> Result<AddressRef<'a>> {
     })
 }
 
-pub fn local_part<'a>(buf: &mut &'a [u8]) -> Result<Quoted<'a>> {
+pub fn local_part<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
     // local-part = dot-atom / quoted-string / obs-local-part
     dot_atom(buf).map(Quoted).or_else(|_| quoted_string(buf))
 }
 
-pub fn domain<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
+pub fn domain<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // domain = dot-atom / domain-literal / obs-domain
     dot_atom(buf).or_else(|_| domain_literal(buf))
 }
@@ -626,7 +657,7 @@ pub fn is_dtext(c: u8) -> bool {
     matches!(c, 33..=90 | 94..=126)
 }
 
-pub fn domain_literal<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
+pub fn domain_literal<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // domain-literal = [CFWS] "[" *([FWS] dtext) [FWS] "]" [CFWS]
     buf.atomic(|buf| {
         buf.maybe(cfws);
@@ -638,7 +669,7 @@ pub fn domain_literal<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
         while !cursor.is_empty() && !cursor.starts_with(b"]") {
             match cursor[0] {
                 c if is_dtext(c) => cursor.advance(1),
-                _ => return Err(SyntaxError),
+                _ => return buf.error("expected text"),
             }
         }
 
@@ -701,9 +732,9 @@ pub enum Header<'a> {
     /// message. If this is done, only one instance of the literal string “Re: ”
     /// ought to be used since use of other strings or more than one instance
     /// can lead to undesirable consequences.
-    Subject(&'a [u8]),
+    Subject(Folded<'a>),
     /// Additional comments on the text of the body of the message
-    Comments(&'a [u8]),
+    Comments(Folded<'a>),
     /// Comma-separated list of important words and phrases that might be useful
     /// for the recipient
     Keywords(KeywordList<'a>),
@@ -720,11 +751,11 @@ pub enum Header<'a> {
     Received(Received<'a>),
     Optional {
         name: &'a str,
-        body: &'a [u8],
+        body: Folded<'a>,
     },
 }
 
-pub fn filed<'a>(buf: &mut &'a [u8]) -> Result<Header<'a>> {
+pub fn filed<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
     buf.atomic(|buf| {
         let name = field_name(buf)?;
         buf.expect(b":")?;
@@ -781,16 +812,16 @@ pub fn filed<'a>(buf: &mut &'a [u8]) -> Result<Header<'a>> {
     })
 }
 
-fn field_name<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
-    let name = buf.take_while(|_, b| matches!(b, 33..=57 | 59..=126));
+fn field_name<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
+    let name = buf.take_while(|b, _| matches!(b, 33..=57 | 59..=126));
     if name.is_empty() {
-        Err(SyntaxError)
+        buf.error("expected header name")
     } else {
         Ok(str::from_utf8(name).unwrap())
     }
 }
 
-fn bcc<'a>(buf: &mut &'a [u8]) -> AddressOrGroupList<'a> {
+fn bcc<'a>(buf: &mut Buffer<'a>) -> AddressOrGroupList<'a> {
     // bcc = [address-list / CFWS]
     buf.maybe(|buf| {
         address_list(buf).or_else(|_| {
@@ -800,15 +831,15 @@ fn bcc<'a>(buf: &mut &'a [u8]) -> AddressOrGroupList<'a> {
     }).unwrap_or(AddressOrGroupList::new(b"", b""))
 }
 
-pub struct MessageIdRef<'a>(&'a str);
+pub struct MessageIdRef<'a>(pub &'a str);
 
 impl<'a> Parse<'a> for MessageIdRef<'a> {
-    fn parse(from: &mut &'a [u8]) -> Result<Self> {
+    fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         msg_id(from)
     }
 }
 
-fn msg_id<'a>(buf: &mut &'a [u8]) -> Result<MessageIdRef<'a>> {
+fn msg_id<'a>(buf: &mut Buffer<'a>) -> Result<MessageIdRef<'a>> {
     // msg-id = [CFWS] "<" id-left "@" id-right ">" [CFWS]
     buf.atomic(|buf| {
         buf.maybe(cfws);
@@ -827,7 +858,7 @@ fn msg_id<'a>(buf: &mut &'a [u8]) -> Result<MessageIdRef<'a>> {
     })
 }
 
-fn no_fold_literal<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
+fn no_fold_literal<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // no-fold-literal = "[" *dtext "]"
     buf.atomic(|buf| {
         buf.expect(b"[")?;
@@ -839,7 +870,7 @@ fn no_fold_literal<'a>(buf: &mut &'a [u8]) -> Result<&'a str> {
 
 pub type MessageIdList<'a> = ListOf<'a, MessageIdRef<'a>>;
 
-fn msg_id_list<'a>(buf: &mut &'a [u8]) -> Result<MessageIdList<'a>> {
+fn msg_id_list<'a>(buf: &mut Buffer<'a>) -> Result<MessageIdList<'a>> {
     buf.take_matching(|buf| {
         msg_id(buf)?;
         while msg_id(buf).is_ok() {}
@@ -849,7 +880,7 @@ fn msg_id_list<'a>(buf: &mut &'a [u8]) -> Result<MessageIdList<'a>> {
 
 pub type KeywordList<'a> = ListOf<'a, Phrase<'a>>;
 
-fn keywords<'a>(buf: &mut &'a [u8]) -> Result<KeywordList<'a>> {
+fn keywords<'a>(buf: &mut Buffer<'a>) -> Result<KeywordList<'a>> {
     // keywords = phrase *("," phrase)
     let value = buf.take_matching(|buf| {
         phrase(buf)?;
@@ -870,7 +901,7 @@ pub enum PathRef<'a> {
     Address(AddressRef<'a>),
 }
 
-pub fn return_path<'a>(buf: &mut &'a [u8]) -> Result<PathRef<'a>> {
+pub fn return_path<'a>(buf: &mut Buffer<'a>) -> Result<PathRef<'a>> {
     // return = "Return-Path:" path CRLF
     buf.atomic(|buf| {
         buf.expect(b"Return-Path:")?;
@@ -880,7 +911,7 @@ pub fn return_path<'a>(buf: &mut &'a [u8]) -> Result<PathRef<'a>> {
     })
 }
 
-fn path<'a>(buf: &mut &'a [u8]) -> Result<PathRef<'a>> {
+fn path<'a>(buf: &mut Buffer<'a>) -> Result<PathRef<'a>> {
     angle_addr(buf).map(PathRef::Address).or_else(|_| buf.atomic(|buf| {
         buf.maybe(cfws);
         buf.expect(b"<")?;
@@ -896,7 +927,7 @@ pub struct Received<'a> {
     pub date: AnyDateTime,
 }
 
-pub fn received<'a>(buf: &mut &'a [u8]) -> Result<Received<'a>> {
+pub fn received<'a>(buf: &mut Buffer<'a>) -> Result<Received<'a>> {
     // received = "Received:" *received-token ";" date-time CRLF
     buf.atomic(|buf| {
         buf.expect(b"Received:")?;
@@ -906,7 +937,7 @@ pub fn received<'a>(buf: &mut &'a [u8]) -> Result<Received<'a>> {
     })
 }
 
-fn received_value<'a>(buf: &mut &'a [u8]) -> Result<Received<'a>> {
+fn received_value<'a>(buf: &mut Buffer<'a>) -> Result<Received<'a>> {
     // received       = *received-token ";" date-time
     // received-token = word / angle-addr / addr-spec / domain
     buf.atomic(|buf| {
@@ -929,12 +960,12 @@ pub enum ReceivedToken<'a> {
 }
 
 impl<'a> Parse<'a> for ReceivedToken<'a> {
-    fn parse(from: &mut &'a [u8]) -> Result<Self> {
+    fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         received_token(from)
     }
 }
 
-fn received_token<'a>(buf: &mut &'a [u8]) -> Result<ReceivedToken<'a>> {
+fn received_token<'a>(buf: &mut Buffer<'a>) -> Result<ReceivedToken<'a>> {
     word(buf).map(ReceivedToken::Word)
         .or_else(|_| angle_addr(buf).map(ReceivedToken::Address))
         .or_else(|_| addr_spec(buf).map(ReceivedToken::Address))

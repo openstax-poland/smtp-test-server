@@ -30,14 +30,14 @@ impl ReversePath {
     }
 }
 
-pub fn reverse_path<'a>(line: &mut &'a [u8]) -> Result<ReversePathRef<'a>> {
+pub fn reverse_path<'a>(buf: &mut Buffer<'a>) -> Result<ReversePathRef<'a>> {
     // Reverse-path = Path / "<>"
-    if line.starts_with(b"<>") {
-        line.advance(2);
+    if buf.starts_with(b"<>") {
+        buf.advance(2);
         return Ok(ReversePathRef::Null);
     }
 
-    path(line).map(ReversePathRef::Mailbox)
+    path(buf).map(ReversePathRef::Mailbox)
 }
 
 pub enum ForwardPathRef<'a> {
@@ -68,69 +68,73 @@ impl ForwardPath {
     }
 }
 
-pub fn forward_path<'a>(line: &mut &'a [u8]) -> Result<ForwardPathRef<'a>> {
-    if line.expect_caseless(b"<postmaster>").is_ok() {
+pub fn forward_path<'a>(buf: &mut Buffer<'a>) -> Result<ForwardPathRef<'a>> {
+    if buf.expect_caseless(b"<postmaster>").is_ok() {
         return Ok(ForwardPathRef::Postmaster(None));
     }
 
-    let path = path(line)?;
+    let path = path(buf)?;
 
     if path.local.eq_ignore_ascii_case("postmaster") {
         match path.location {
             DomainRefOrAddr::Domain(domain) => Ok(ForwardPathRef::Postmaster(Some(domain))),
-            DomainRefOrAddr::Addr(_) => Err(SyntaxError),
+            DomainRefOrAddr::Addr(_) => buf.error("expected domain name"),
         }
     } else {
         Ok(ForwardPathRef::Mailbox(path))
     }
 }
 
-pub fn path<'a>(line: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
+pub fn path<'a>(buf: &mut Buffer<'a>) -> Result<MailboxRef<'a>> {
     // Path = "<" [ A-d-l ":" ] Mailbox ">"
-    line.atomic(|line| {
-        line.expect(b"<")?;
+    buf.atomic(|buf| {
+        buf.expect(b"<")?;
 
         // A-d-l     = At-domain *( "," At-domain )
         // At-domain = "@" Domain
-        if line.starts_with(b"@") {
+        if buf.starts_with(b"@") {
             loop {
-                line.expect(b"@")?;
-                domain(line)?;
+                buf.expect(b"@")?;
+                domain(buf)?;
 
-                if line.starts_with(b":") {
-                    line.advance(1);
+                if buf.starts_with(b":") {
+                    buf.advance(1);
                     break;
-                } else if line.starts_with(b",") {
-                    line.advance(1);
+                } else if buf.starts_with(b",") {
+                    buf.advance(1);
                 } else {
-                    return Err(SyntaxError);
+                    return buf.error("expected one of ':' or ','");
                 }
             }
         }
 
-        let mailbox = mailbox(line)?;
-        line.expect(b">")?;
+        let mailbox = mailbox(buf)?;
+        buf.expect(b">")?;
 
         Ok(mailbox)
     })
 }
 
-pub fn parameter<'a>(line: &mut &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
+pub fn parameter<'a>(buf: &mut Buffer<'a>) -> Result<(&'a [u8], &'a [u8])> {
     // Mail-parameters = esmtp-param *(SP esmtp-param)
     // Rcpt-parameters = esmtp-param *(SP esmtp-param)
     // esmtp-param     = esmtp-keyword ["=" esmtp-value]
     // esmtp-keyword   = (ALPHA / DIGIT) *(ALPHA / DIGIT / "-")
     // esmtp-value     = 1*(%d33-60 / %d62-126)
-    line.atomic(|line| {
-        let keyword = line.take_while(|c, inx| c.is_ascii_alphanumeric() || c == b'-' && inx > 0);
-        line.expect(b"=")?;
-        let value = line.take_while(|c, _| matches!(c, 33..=60 | 62..=126));
-
-        if keyword.is_empty() || value.is_empty() {
-            Err(SyntaxError)
-        } else {
-            Ok((keyword, value))
+    buf.atomic(|buf| {
+        let keyword = buf.take_while(|c, inx| c.is_ascii_alphanumeric() || c == b'-' && inx > 0);
+        if keyword.is_empty() {
+            return buf.error("expected a keyword");
         }
+
+        buf.expect(b"=")?;
+
+        let value = buf.take_while(|c, _| matches!(c, 33..=60 | 62..=126));
+        if value.is_empty() {
+            return buf.error("expected a value");
+        }
+
+        Ok((keyword, value))
     })
 }
 
@@ -181,79 +185,74 @@ impl fmt::Display for DomainOrAddr {
     }
 }
 
-pub fn domain_or_address<'a>(line: &mut &'a [u8]) -> Result<DomainRefOrAddr<'a>> {
-    domain(line).map(DomainRefOrAddr::Domain)
-        .or_else(|_| address_literal(line).map(DomainRefOrAddr::Addr))
+pub fn domain_or_address<'a>(buf: &mut Buffer<'a>) -> Result<DomainRefOrAddr<'a>> {
+    if buf.starts_with(b"[") {
+        address_literal(buf).map(DomainRefOrAddr::Addr)
+    } else {
+        domain(buf).map(DomainRefOrAddr::Domain)
+    }
 }
 
-pub fn domain<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
-    line.atomic(|line| {
-        let mut offset = 0;
-
+pub fn domain<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
+    let value = buf.take_matching(|buf| {
         // Domain = sub-domain *("." sub-domain)
         loop {
             // sub-domain = Let-dig [Ldh-str]
             // Let-dig    = ALPHA / DIGIT
-            if !line[offset].is_ascii_alphanumeric() {
-                return Err(SyntaxError);
+            if !buf[0].is_ascii_alphanumeric() {
+                return buf.error("expected letter or digit");
             }
-            offset += 1;
+            buf.advance(1);
 
             // Ldh-str = *( ALPHA / DIGIT / "-" ) Let-dig
-            while offset < line.len()
-            && (line[offset].is_ascii_alphanumeric() || line[offset] == b'-') {
-                offset += 1;
+            let ldh = buf.take_while(|ch, _| ch.is_ascii_alphabetic() || ch == b'-');
+
+            if ldh.ends_with(b"-") {
+                return buf.error("expected letter or digit following '-'");
             }
 
-            if line[offset - 1] == b'-' {
-                return Err(SyntaxError);
-            }
-
-            if offset >= line.len()
-            || line[offset] != b'.' {
+            if buf.is_empty() || buf.expect(b".").is_err() {
                 break;
             }
         }
 
-        let domain = str::from_utf8(&line[..offset]).unwrap();
-        line.advance(offset);
-
-        Ok(domain)
-    })
+        Ok(())
+    })?;
+    Ok(str::from_utf8(value).unwrap())
 }
 
-pub fn address_literal(line: &mut &[u8]) -> Result<IpAddr> {
+pub fn address_literal(buf: &mut Buffer) -> Result<IpAddr> {
     // address-literal = "[" ( IPv4-address-literal / IPv6-address-literal ) "]"
-    line.atomic(|line| {
-        line.expect(b"[")?;
+    buf.atomic(|buf| {
+        buf.expect(b"[")?;
 
         // IPv6-address-literal = "IPv6:" IPv6-addr
-        let addr = if line.starts_with(b"IPv6:") {
-            line.advance(5);
-            address_ipv6(line)?.into()
+        let addr = if buf.starts_with(b"IPv6:") {
+            buf.advance(5);
+            address_ipv6(buf)?.into()
         } else {
-            address_ipv4(line)?.into()
+            address_ipv4(buf)?.into()
         };
 
-        line.expect(b"]")?;
+        buf.expect(b"]")?;
 
         Ok(addr)
     })
 }
 
-pub fn address_ipv4(line: &mut &[u8]) -> Result<Ipv4Addr> {
+pub fn address_ipv4(buf: &mut Buffer) -> Result<Ipv4Addr> {
     // IPv4-address-literal = Snum 3("."  Snum)
     // Snum                 = 1*3DIGIT
-    line.atomic(|line| {
-        let a = read_number(line, 10, 1, 3)?;
-        let b = read_number(line, 10, 1, 3)?;
-        let c = read_number(line, 10, 1, 3)?;
-        let d = read_number(line, 10, 1, 3)?;
+    buf.atomic(|buf| {
+        let a = read_number(buf, 10, 1, 3)?;
+        let b = read_number(buf, 10, 1, 3)?;
+        let c = read_number(buf, 10, 1, 3)?;
+        let d = read_number(buf, 10, 1, 3)?;
         Ok(Ipv4Addr::new(a, b, c, d))
     })
 }
 
-pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
+pub fn address_ipv6(buf: &mut Buffer) -> Result<Ipv6Addr> {
     // IPv6-addr      = IPv6-full / IPv6-comp / IPv6v4-full / IPv6v4-comp
     // IPv6-full      = IPv6-hex 7(":" IPv6-hex)
     // IPv6-comp      = [IPv6-hex *5(":" IPv6-hex)] "::" [IPv6-hex *5(":" IPv6-hex)]
@@ -269,29 +268,29 @@ pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
     /// address was read. Specifically, read a series of colon-separated IPv6
     /// groups (0x0000 - 0xFFFF), with an optional trailing embedded IPv4
     /// address.
-    fn read_groups(line: &mut &[u8], groups: &mut [u16]) -> (usize, bool) {
+    fn read_groups(buf: &mut Buffer, groups: &mut [u16]) -> (usize, bool) {
         let limit = groups.len();
 
         for (i, slot) in groups.iter_mut().enumerate() {
             // Try to read a trailing embedded IPv4 address. There must be at
             // least two groups left.
             if i < limit - 1 {
-                let mut cursor = *line;
+                let mut cursor = *buf;
                 if let Ok(addr) = address_ipv4(&mut cursor) {
                     let [one, two, three, four] = addr.octets();
                     groups[i + 0] = u16::from_be_bytes([one, two]);
                     groups[i + 1] = u16::from_be_bytes([three, four]);
-                    *line = cursor;
+                    *buf = cursor;
                     return (i + 2, true);
                 }
             }
 
-            let group = line.atomic(|line| {
+            let group = buf.atomic(|buf| {
                 if i > 0 {
-                    line.expect(b":")?;
+                    buf.expect(b":")?;
                 }
 
-                read_number(line, 16, 1, 4)
+                read_number(buf, 16, 1, 4)
             }).ok();
 
             match group {
@@ -303,11 +302,11 @@ pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
         (groups.len(), false)
     }
 
-    line.atomic(|line| {
+    buf.atomic(|buf| {
         // Read the front part of the address; either the whole thing, or up
         // to the first ::
         let mut head = [0; 8];
-        let (head_size, head_ipv4) = read_groups(line, &mut head);
+        let (head_size, head_ipv4) = read_groups(buf, &mut head);
 
         if head_size == 8 {
             return Ok(head.into());
@@ -315,18 +314,18 @@ pub fn address_ipv6(line: &mut &[u8]) -> Result<Ipv6Addr> {
 
         // IPv4 part is not allowed before `::`
         if head_ipv4 {
-            return Err(SyntaxError);
+            return buf.error("IP v4 address may not be followed by '::'");
         }
 
         // Read `::` if previous code parsed less than 8 groups.
         // `::` indicates one or more groups of 16 bits of zeros.
-        line.expect(b"::")?;
+        buf.expect(b"::")?;
 
         // Read the back part of the address. The :: must contain at least one
         // set of zeroes, so our max length is 7.
         let mut tail = [0; 7];
         let limit = 8 - (head_size + 1);
-        let (tail_size, _) = read_groups(line, &mut tail[..limit]);
+        let (tail_size, _) = read_groups(buf, &mut tail[..limit]);
 
         // Concat the head and tail of the IP address
         head[(8 - tail_size)..8].copy_from_slice(&tail[..tail_size]);
@@ -363,68 +362,56 @@ impl Mailbox {
     }
 }
 
-pub fn mailbox<'a>(line: &mut &'a [u8]) -> Result<MailboxRef<'a>> {
+pub fn mailbox<'a>(buf: &mut Buffer<'a>) -> Result<MailboxRef<'a>> {
     // Mailbox    = Local-part "@" ( Domain / address-literal )
     // Local-part = Dot-string / Quoted-string
-    line.atomic(|line| {
-        let local = quoted_string(line).or_else(|_| dot_string(line))?;
-        line.expect(b"@")?;
-        let location = domain_or_address(line)?;
+    buf.atomic(|buf| {
+        let local = quoted_string(buf).or_else(|_| dot_string(buf))?;
+        buf.expect(b"@")?;
+        let location = domain_or_address(buf)?;
         Ok(MailboxRef { local, location })
     })
 }
 
-pub fn dot_string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
-    line.atomic(|line| {
-        let mut cursor = *line;
-
-        // Dot-string = Atom *("."  Atom)
-        atom(&mut cursor)?;
-        while cursor.starts_with(b".") {
-            cursor.advance(1);
-            atom(&mut cursor)?;
+pub fn dot_string<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
+    let value = buf.take_matching(|buf| {
+        atom(buf)?;
+        while buf.expect(b".").is_ok() {
+            atom(buf)?;
         }
-
-        let len = line.len() - cursor.len();
-        let string = str::from_utf8(&line[..len]).unwrap();
-
-        *line = cursor;
-        Ok(string)
-    })
+        Ok(())
+    })?;
+    Ok(str::from_utf8(value).unwrap())
 }
 
-pub fn quoted_string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
-    line.atomic(|line| {
+pub fn quoted_string<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
+    let value = buf.take_matching(|buf| {
         // Quoted-string = DQUOTE *QcontentSMTP DQUOTE
 
-        line.expect(b"\"")?;
-
-        let mut offset = 0;
+        buf.expect(b"\"")?;
 
         // QcontentSMTP = qtextSMTP / quoted-pairSMTP
-        while offset < line.len() && line[offset] != b'"' {
-            match line[offset] {
+        while !buf.is_empty() && buf[0] != b'"' {
+            match buf[0] {
                 // qtextSMTP = %d32-33 / %d35-91 / %d93-126
-                32..=33 | 35..=91 | 93..=126 => offset += 1,
+                32..=33 | 35..=91 | 93..=126 => buf.advance(1),
                 // quoted-pairSMTP = %d92 %d32-126
-                92 if offset + 1 < line.len() => match line[offset + 1] {
-                    32..=126 => offset += 2,
-                    _ => return Err(SyntaxError),
+                92 if buf.len() > 1 => match buf[1] {
+                    32..=126 => buf.advance(2),
+                    _ => return buf.error("invalid escape sequence"),
                 },
-                _ => return Err(SyntaxError)
+                _ => return buf.error("invalid character in quoted string"),
             }
         }
 
-        let string = str::from_utf8(&line[..offset]).unwrap();
-        line.advance(offset);
+        buf.expect(b"\"")?;
 
-        line.expect(b"\"")?;
-
-        Ok(string)
-    })
+        Ok(())
+    })?;
+    Ok(str::from_utf8(value).unwrap())
 }
 
-pub fn string<'a>(line: &mut &'a [u8]) -> Result<&'a str> {
+pub fn string<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
     // String = Atom / Quoted-string
-    atom(line).or_else(|_| quoted_string(line))
+    atom(buf).or_else(|_| quoted_string(buf))
 }

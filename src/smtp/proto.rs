@@ -1,8 +1,9 @@
 //! SMTP protocol state machine
 
 use std::{io::Write as _, fmt, net::SocketAddr};
+use thiserror::Error;
 
-use crate::syntax::{SliceExt, SyntaxError};
+use crate::syntax::*;
 use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, ReversePath, ForwardPath};
 
 pub struct Connection {
@@ -62,12 +63,7 @@ impl Connection {
 
         let command = match Command::parse(line) {
             Ok(command) => command,
-            Err(err) => return Some(match err {
-                CommandParseError::Syntax(_) =>
-                    Response::new(&mut self.response, 500, "Syntax error"),
-                CommandParseError::Unknown =>
-                    Response::new(&mut self.response, 500, "Command not recognized"),
-            })
+            Err(err) => return Some(Response::new(&mut self.response, 500, err)),
         };
 
         Some(match command {
@@ -268,9 +264,12 @@ struct Recipient<'a> {
     to: ForwardPathRef<'a>,
 }
 
+#[derive(Debug, Error)]
 enum CommandParseError {
+    #[error(transparent)]
     Syntax(SyntaxError),
     /// Unknown command
+    #[error("Command not recognized")]
     Unknown,
 }
 
@@ -286,6 +285,7 @@ impl<'a> Command<'a> {
             line = &line[..line.len() - 2];
         }
 
+        let mut line = Buffer::new(line);
         let command = crate::syntax::atom(&mut line)?;
 
         let command = if command.eq_ignore_ascii_case("HELO") {
@@ -318,7 +318,7 @@ impl<'a> Command<'a> {
         Ok(command)
     }
 
-    fn parse_helo(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_helo(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect(b" ")?;
         Ok(Command::Hello(Hello {
             extended: false,
@@ -326,7 +326,7 @@ impl<'a> Command<'a> {
         }))
     }
 
-    fn parse_ehlo(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_ehlo(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect(b" ")?;
         Ok(Command::Hello(Hello {
             extended: true,
@@ -334,7 +334,7 @@ impl<'a> Command<'a> {
         }))
     }
 
-    fn parse_mail(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_mail(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect_caseless(b" FROM:")?;
         let from = syntax::reverse_path(line)?;
 
@@ -343,7 +343,7 @@ impl<'a> Command<'a> {
         Ok(Command::Mail(Mail { from }))
     }
 
-    fn parse_rcpt(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_rcpt(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect_caseless(b" TO:")?;
         let to = syntax::forward_path(line)?;
 
@@ -352,17 +352,17 @@ impl<'a> Command<'a> {
         Ok(Command::Recipient(Recipient { to }))
     }
 
-    fn parse_vrfy(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_vrfy(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect(b" ")?;
         Ok(Command::Verify(syntax::string(line)?))
     }
 
-    fn parse_expn(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_expn(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         line.expect(b" ")?;
         Ok(Command::Expand(syntax::string(line)?))
     }
 
-    fn parse_help(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_help(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         let topic = match line.expect(b" ") {
             Ok(_) => Some(syntax::string(line)?),
             Err(_) => None,
@@ -370,7 +370,7 @@ impl<'a> Command<'a> {
         Ok(Command::Help(topic))
     }
 
-    fn parse_noop(line: &mut &'a [u8]) -> Result<Self, CommandParseError> {
+    fn parse_noop(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
         if line.expect(b" ").is_ok() {
             syntax::string(line)?;
         }
