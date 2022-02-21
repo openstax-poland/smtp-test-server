@@ -4,10 +4,10 @@ use anyhow::{Context, Result};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
-use crate::util;
+use crate::{state::StateRef, util};
 use super::proto::{Connection, Response};
 
-pub async fn start() -> Result<()> {
+pub async fn start(state: StateRef) -> Result<()> {
     // IPv4 TCP listener on port 587 (per RFC 6409)
     let listener_ipv4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 587))
         .await
@@ -19,21 +19,23 @@ pub async fn start() -> Result<()> {
         .context("could not bind TCP socket on localhost:587")?;
 
     tokio::try_join!(
-        handle_listener(listener_ipv4),
-        handle_listener(listener_ipv6),
+        handle_listener(state.clone(), listener_ipv4),
+        handle_listener(state.clone(), listener_ipv6),
     )?;
 
     Ok(())
 }
 
-async fn handle_listener(listener: TcpListener) -> Result<()> {
+async fn handle_listener(state: StateRef, listener: TcpListener) -> Result<()> {
     loop {
         let (socket, addr) = listener.accept()
             .await
             .context("could not accept connection")?;
 
+        let state = state.clone();
+
         tokio::spawn(async move {
-            if let Err(err) = handle_client(socket).await {
+            if let Err(err) = handle_client(state, socket).await {
                 log::error!("error serving {addr}: {err:?}");
             }
         });
@@ -41,8 +43,8 @@ async fn handle_listener(listener: TcpListener) -> Result<()> {
 }
 
 /// Handle one SMTP connection
-async fn handle_client(mut socket: TcpStream) -> Result<()> {
-    let mut smtp = Connection::new(socket.local_addr()?);
+async fn handle_client(state: StateRef, mut socket: TcpStream) -> Result<()> {
+    let mut smtp = Connection::new(state, socket.local_addr()?);
 
     {
         let response = smtp.connect();
@@ -64,7 +66,7 @@ async fn handle_client(mut socket: TcpStream) -> Result<()> {
 async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Result<()> {
     loop {
         let response = match read_line(socket, smtp.buffer()).await? {
-            None => smtp.line(),
+            None => smtp.line().await,
             Some(response) => Some(response),
         };
 

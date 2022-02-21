@@ -3,10 +3,11 @@
 use std::{io::Write as _, fmt, net::SocketAddr, mem};
 use thiserror::Error;
 
-use crate::{syntax::*, util};
+use crate::{syntax::*, state::StateRef, util};
 use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, ReversePath, ForwardPath};
 
 pub struct Connection {
+    global: StateRef,
     name: SocketAddr,
     state: State,
     reverse_path: Option<ReversePath>,
@@ -41,8 +42,9 @@ enum State {
 }
 
 impl Connection {
-    pub fn new(name: SocketAddr) -> Connection {
+    pub fn new(global: StateRef, name: SocketAddr) -> Connection {
         Connection {
+            global,
             name,
             state: State::Handshake,
             reverse_path: None,
@@ -70,9 +72,9 @@ impl Connection {
     }
 
     /// Handle single line
-    pub fn line(&mut self) -> Option<Response> {
+    pub async fn line<'a>(&'a mut self) -> Option<Response<'a>> {
         if self.state == State::Data {
-            return self.data_line();
+            return self.data_line().await;
         }
 
         log::trace!(">> {}", util::maybe_ascii(&self.line));
@@ -107,6 +109,8 @@ impl Connection {
             format!("{} Service closing transmission channel", self.name)).close()
     }
 
+    // ---------------------------------------------------- command handlers ---
+
     fn handshake(&mut self, hello: Hello) -> Response {
         self.reset_buffers();
 
@@ -125,32 +129,26 @@ impl Connection {
         self.reverse_path = Some(mail.from.to_owned());
         self.state = State::Recipients;
 
-        Response::new(&mut self.response, 000, "TODO")
+        Response::OK_250
     }
 
     fn recipient(&mut self, recipient: Recipient) -> Response {
         if self.state != State::Recipients {
-            return Response::new(&mut self.response, 000, "TODO");
+            return Response::BAD_SEQUENCE_OF_COMMANDS;
         }
 
         self.forward_path.push(recipient.to.to_owned());
 
-        Response::new(&mut self.response, 000, "TODO")
+        Response::OK_250
     }
 
-    fn data_line(&mut self) -> Option<Response> {
+    async fn data_line<'a>(&'a mut self) -> Option<Response<'a>> {
         log::trace!(">> {}", util::maybe_ascii(&self.message[self.message_length..]));
 
         if self.message.ends_with(b"\r\n.\r\n") {
             self.state = State::Relaxed;
             self.message_length = self.message.len() - 5;
-
-            if !self.message.iter().all(u8::is_ascii) {
-                return Some(Response::INVALID_CHARACTERS);
-            }
-
-            // TODO: process email
-            return Some(Response::new(&mut self.response, 000, "TODO"));
+            return Some(self.submit_message().await);
         }
 
         if self.message[self.message_length..].starts_with(b".") {
@@ -164,7 +162,7 @@ impl Connection {
 
     fn data(&mut self) -> Response {
         self.state = State::Data;
-        todo!()
+        Response::START_MAIL_INPUT
     }
 
     fn reset(&mut self) -> Response {
@@ -203,11 +201,31 @@ impl Connection {
 
         Response::new(&mut self.response, 504, format!("No help found for topic {topic:?}"))
     }
+
+    // -------------------------------------------------- message processing ---
+
+    async fn submit_message<'a>(&'a mut self) -> Response<'a> {
+        if !self.message.iter().all(u8::is_ascii) {
+            let at = self.message.iter().position(|c| !c.is_ascii()).unwrap();
+            log::trace!("not everything is ASCII: {} at {at}", self.message[at]);
+            return Response::INVALID_CHARACTERS;
+        }
+
+        match self.global.submit_message(&self.message[..self.message_length]).await {
+            Ok(()) => Response::OK_250,
+            Err(err) => Response::new(&mut self.response, err.code(), err),
+        }
+    }
 }
 
 impl<'a> Response<'a> {
     const OK_250: Response<'static> = Response {
         data: b"250 OK\r\n",
+        close_connection: false,
+    };
+
+    const START_MAIL_INPUT: Response<'static> = Response {
+        data: b"354 Start mail input; end with <CRLF>.<CRLF>\r\n",
         close_connection: false,
     };
 
@@ -223,6 +241,11 @@ impl<'a> Response<'a> {
 
     pub const LINE_TOO_LONG: Response<'static> = Response {
         data: b"500 Line too long\r\n",
+        close_connection: false,
+    };
+
+    const BAD_SEQUENCE_OF_COMMANDS: Response<'static> = Response {
+        data: b"503 Bad sequence of commands\r\n",
         close_connection: false,
     };
 
