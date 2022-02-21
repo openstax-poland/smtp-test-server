@@ -1,9 +1,9 @@
 //! SMTP protocol state machine
 
-use std::{io::Write as _, fmt, net::SocketAddr};
+use std::{io::Write as _, fmt, net::SocketAddr, mem};
 use thiserror::Error;
 
-use crate::syntax::*;
+use crate::{syntax::*, util};
 use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, ReversePath, ForwardPath};
 
 pub struct Connection {
@@ -11,7 +11,12 @@ pub struct Connection {
     state: State,
     reverse_path: Option<ReversePath>,
     forward_path: Vec<ForwardPath>,
+    /// Line buffer
+    line: Vec<u8>,
+    /// Message buffer
     message: Vec<u8>,
+    /// Length of message
+    message_length: usize,
     /// Response buffer
     response: Vec<u8>,
 }
@@ -42,7 +47,13 @@ impl Connection {
             state: State::Handshake,
             reverse_path: None,
             forward_path: vec![],
-            message: vec![],
+            // RFC 5321 section 4.5.3.1.6 specifies 1000 octets as smallest
+            // allowed upper limit on length of a single line.
+            line: Vec::with_capacity(1000),
+            // RFC 5321 section 4.5.3.1.7 specified 64k octets as smallest
+            // allowed upper limit on message length.
+            message: Vec::with_capacity(64 * 1024),
+            message_length: 0,
             response: vec![],
         }
     }
@@ -51,17 +62,29 @@ impl Connection {
         Response::new(&mut self.response, 220, format!("{} Service ready", self.name))
     }
 
+    pub fn buffer(&mut self) -> &mut Vec<u8> {
+        match self.state {
+            State::Data => &mut self.message,
+            _ => &mut self.line,
+        }
+    }
+
     /// Handle single line
-    pub fn line(&mut self, line: &[u8]) -> Option<Response> {
+    pub fn line(&mut self) -> Option<Response> {
         if self.state == State::Data {
-            return self.data_line(line);
+            return self.data_line();
         }
 
-        if !line.iter().all(u8::is_ascii) {
+        log::trace!(">> {}", util::maybe_ascii(&self.line));
+
+        if !self.line.iter().all(u8::is_ascii) {
             return Some(Response::INVALID_CHARACTERS);
         }
 
-        let command = match Command::parse(line) {
+        let new_line = Vec::with_capacity(self.line.capacity());
+        let line = mem::replace(&mut self.line, new_line);
+
+        let command = match Command::parse(&line) {
             Ok(command) => command,
             Err(err) => return Some(Response::new(&mut self.response, 500, err)),
         };
@@ -115,9 +138,12 @@ impl Connection {
         Response::new(&mut self.response, 000, "TODO")
     }
 
-    fn data_line(&mut self, mut line: &[u8]) -> Option<Response> {
-        if line == b".\r\n" {
+    fn data_line(&mut self) -> Option<Response> {
+        log::trace!(">> {}", util::maybe_ascii(&self.message[self.message_length..]));
+
+        if self.message.ends_with(b"\r\n.\r\n") {
             self.state = State::Relaxed;
+            self.message_length = self.message.len() - 5;
 
             if !self.message.iter().all(u8::is_ascii) {
                 return Some(Response::INVALID_CHARACTERS);
@@ -127,11 +153,11 @@ impl Connection {
             return Some(Response::new(&mut self.response, 000, "TODO"));
         }
 
-        if line.starts_with(b".") {
-            line = &line[1..];
+        if self.message[self.message_length..].starts_with(b".") {
+            self.message.remove(self.message_length);
         }
 
-        self.message.extend_from_slice(line);
+        self.message_length = self.message.len();
 
         None
     }
@@ -150,6 +176,8 @@ impl Connection {
         self.reverse_path = None;
         self.forward_path.clear();
         self.state = State::Relaxed;
+        self.message.clear();
+        self.message_length = 0;
     }
 
     fn help(&mut self, topic: Option<&str>) -> Response {
@@ -190,6 +218,11 @@ impl<'a> Response<'a> {
 
     const INVALID_CHARACTERS: Response<'static> = Response {
         data: b"500 Syntax error - invalid character\r\n",
+        close_connection: false,
+    };
+
+    pub const LINE_TOO_LONG: Response<'static> = Response {
+        data: b"500 Line too long\r\n",
         close_connection: false,
     };
 

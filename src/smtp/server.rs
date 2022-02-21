@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use std::net::Ipv4Addr;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
-use super::proto::Connection;
+use crate::util;
+use super::proto::{Connection, Response};
 
 pub async fn start() -> Result<()> {
     // IPv4 TCP listener on port 587 (per RFC 6409)
@@ -47,14 +48,14 @@ async fn handle_client(mut socket: TcpStream) -> Result<()> {
 }
 
 async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Result<()> {
-    // RFC 5321 section 4.5.3.1.6 specifies 1000 octets as smallest allowed
-    // upper limit on length of a single line.
-    let mut line: Vec<u8> = Vec::with_capacity(1000);
-
     loop {
-        let len = read_line(socket, &mut line).await?;
+        let response = match read_line(socket, smtp.buffer()).await? {
+            None => smtp.line(),
+            Some(response) => Some(response),
+        };
 
-        if let Some(response) = smtp.line(&line[..len]) {
+        if let Some(response) = response {
+            log::trace!("<< {}", util::maybe_ascii(&response.data));
             socket.write_all(response.data).await?;
             socket.flush().await?;
 
@@ -70,9 +71,8 @@ async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Resul
 /// Read single line into a line buffer
 ///
 /// Returns number of octets in current line, including terminating `\r\n`.
-async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>) -> Result<usize> {
-    line.clear();
-
+async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
+-> Result<Option<Response<'static>>> {
     let mut offset = 0;
 
     loop {
@@ -85,7 +85,7 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>) -> Result<usize> 
                     offset += o;
 
                     if line[offset..].starts_with(b"\r\n") {
-                        return Ok(offset + 2);
+                        return Ok(None);
                     }
                 }
             }
@@ -93,6 +93,12 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>) -> Result<usize> 
             if line.ends_with(b"\r") {
                 offset -= 1;
             }
+        }
+
+        if offset >= line.capacity() {
+            log::trace!(">> {}", util::maybe_ascii(line));
+            log::trace!("offset {offset} > limit {}, returning 500", line.capacity());
+            return Ok(Some(Response::LINE_TOO_LONG));
         }
     }
 }
