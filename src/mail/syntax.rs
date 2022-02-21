@@ -224,22 +224,21 @@ impl<'a> Folded<'a> {
 fn unstructured<'a>(buf: &mut Buffer<'a>) -> Result<Folded<'a>> {
     // unstructured = (*([FWS] VCHAR) *WSP) / obs-unstruct
 
-    let mut cursor = *buf;
+    let value = buf.take_matching(|buf| {
+        while !buf.is_empty() {
+            buf.maybe(fws);
 
-    while !cursor.is_empty() {
-        if !is_vchar(cursor[0]) {
-            if fws(&mut cursor).is_err() {
+            if buf.take_while(|b, _| is_vchar(b)).is_empty() {
                 break;
             }
         }
-    }
 
-    let length = buf.len() - cursor.len();
-    let value = str::from_utf8(buf.take(length)).unwrap();
+        Ok(())
+    })?;
 
     while wsp(buf).is_ok() {}
 
-    Ok(Folded(value))
+    Ok(Folded(str::from_utf8(value).unwrap()))
 }
 
 // ------------------------------------------------------ 3.3. Date and Time ---
