@@ -7,6 +7,8 @@ use crate::syntax::*;
 
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
+pub use self::syntax::{Address, AddressOrGroup, Mailbox};
+
 mod syntax;
 
 pub struct ParsedMessage<'a> {
@@ -15,6 +17,7 @@ pub struct ParsedMessage<'a> {
     pub origination_date: AnyDateTime,
     pub from: MailboxList<'a>,
     pub sender: Option<MailboxRef<'a>>,
+    pub to: AddressOrGroupList<'a>,
     pub subject: Option<String>,
     pub body: &'a [u8],
 }
@@ -110,6 +113,7 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
         origination_date,
         from,
         sender,
+        to: to.unwrap_or_default(),
         subject,
         body,
     })

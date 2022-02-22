@@ -692,6 +692,7 @@ checksum = "004cbc98f30fa233c61a38bc77e96a9106e65c88f2d3bef182ae952027e5753d"
 dependencies = [
  "libc",
  "num_threads",
+ "serde",
 ]
 
 [[package]]

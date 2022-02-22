@@ -1,4 +1,5 @@
 use std::{str, borrow::Cow};
+use serde::Serialize;
 use time::{Weekday, Month, UtcOffset, Time, Date, OffsetDateTime, PrimitiveDateTime};
 
 use crate::syntax::*;
@@ -249,6 +250,15 @@ pub enum AnyDateTime {
     Offset(OffsetDateTime)
 }
 
+impl AnyDateTime {
+    pub fn with_offset_when_missing(self, offset: UtcOffset) -> OffsetDateTime {
+        match self {
+            AnyDateTime::Local(date) => date.assume_offset(offset),
+            AnyDateTime::Offset(date) => date,
+        }
+    }
+}
+
 pub fn date_time(buf: &mut Buffer) -> Result<AnyDateTime> {
     // date-time = [ day-of-week "," ] date time [CFWS]
     buf.atomic(|buf| {
@@ -467,14 +477,31 @@ pub fn zone(buf: &mut Buffer) -> Result<Option<UtcOffset>> {
 
 // ------------------------------------------------------------ 3.4. Address ---
 
+#[derive(Clone, Copy, Debug)]
 pub enum AddressOrGroupRef<'a> {
     Mailbox(MailboxRef<'a>),
     Group(GroupRef<'a>),
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum AddressOrGroup {
+    Mailbox(Mailbox),
+    Group(Group),
+}
+
 impl<'a> Parse<'a> for AddressOrGroupRef<'a> {
     fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         address(from)
+    }
+}
+
+impl AddressOrGroupRef<'_> {
+    pub fn to_owned(self) -> AddressOrGroup {
+        match self {
+            AddressOrGroupRef::Mailbox(v) => AddressOrGroup::Mailbox(v.to_owned()),
+            AddressOrGroupRef::Group(v) => AddressOrGroup::Group(v.to_owned()),
+        }
     }
 }
 
@@ -490,9 +517,24 @@ pub struct MailboxRef<'a> {
     pub address: AddressRef<'a>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct Mailbox {
+    pub name: Option<String>,
+    pub address: Address,
+}
+
 impl<'a> Parse<'a> for MailboxRef<'a> {
     fn parse(from: &mut Buffer<'a>) -> Result<Self> {
         mailbox(from)
+    }
+}
+
+impl MailboxRef<'_> {
+    pub fn to_owned(self) -> Mailbox {
+        Mailbox {
+            name: self.name.as_ref().map(Phrase::unquote),
+            address: self.address.to_owned(),
+        }
     }
 }
 
@@ -525,9 +567,25 @@ pub fn angle_addr<'a>(buf: &mut Buffer<'a>) -> Result<AddressRef<'a>> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct GroupRef<'a> {
     pub name: Phrase<'a>,
     pub members: MailboxList<'a>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Group {
+    pub name: String,
+    pub members: Vec<Mailbox>,
+}
+
+impl GroupRef<'_> {
+    pub fn to_owned(self) -> Group {
+        Group {
+            name: self.name.unquote(),
+            members: self.members.iter().map(MailboxRef::to_owned).collect(),
+        }
+    }
 }
 
 pub fn group<'a>(buf: &mut Buffer<'a>) -> Result<GroupRef<'a>> {
@@ -578,6 +636,21 @@ pub fn group_list<'a>(buf: &mut Buffer<'a>) -> Result<MailboxList<'a>> {
 pub struct AddressRef<'a> {
     pub local: Quoted<'a>,
     pub domain: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Address {
+    pub local: String,
+    pub domain: String,
+}
+
+impl AddressRef<'_> {
+    pub fn to_owned(self) -> Address {
+        Address {
+            local: Cow::into_owned(self.local.unquote()),
+            domain: self.domain.into(),
+        }
+    }
 }
 
 pub fn addr_spec<'a>(buf: &mut Buffer<'a>) -> Result<AddressRef<'a>> {

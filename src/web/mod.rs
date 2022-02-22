@@ -7,9 +7,10 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Serialize;
+use time::OffsetDateTime;
 use std::sync::Arc;
 
-use crate::state::{StateRef, Message};
+use crate::{state::{StateRef, Message}, mail::{Mailbox, AddressOrGroup}};
 
 pub async fn start(state: StateRef) -> Result<()> {
     let app = Router::new()
@@ -29,14 +30,21 @@ pub async fn start(state: StateRef) -> Result<()> {
 #[derive(Debug, Serialize)]
 struct MessageData {
     id: String,
+    #[serde(with = "time::serde::timestamp")]
+    date: OffsetDateTime,
+    from: Vec<Mailbox>,
     subject: Option<String>,
+    to: Vec<AddressOrGroup>,
 }
 
 impl From<&'_ Message> for MessageData {
-    fn from(Message { id, subject, .. }: &'_ Message) -> Self {
+    fn from(Message { id, date, from, subject, to, .. }: &'_ Message) -> Self {
         MessageData {
             id: id.clone(),
+            date: *date,
+            from: from.clone(),
             subject: subject.clone(),
+            to: to.clone(),
         }
     }
 }

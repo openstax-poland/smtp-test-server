@@ -1,9 +1,9 @@
 use std::{collections::{HashMap, hash_map::Entry}, sync::Arc};
 use thiserror::Error;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::{mail, syntax::SyntaxError};
+use crate::{mail::{self, Mailbox, AddressOrGroup}, syntax::SyntaxError};
 
 pub struct State {
     messages: RwLock<HashMap<String, Arc<Message>>>,
@@ -14,7 +14,10 @@ pub type StateRef = Arc<State>;
 
 pub struct Message {
     pub id: String,
+    pub date: OffsetDateTime,
+    pub from: Vec<Mailbox>,
     pub subject: Option<String>,
+    pub to: Vec<AddressOrGroup>,
     // TODO: parse message body
     pub body: String,
 }
@@ -45,7 +48,10 @@ impl State {
         let message = Message {
             id: message.id.unwrap_or_else(
                 || format!("{}@local", OffsetDateTime::now_utc().unix_timestamp())),
+            date: message.origination_date.with_offset_when_missing(UtcOffset::UTC),
+            from: message.from.iter().map(|x| x.to_owned()).collect(),
             subject: message.subject,
+            to: message.to.iter().map(|x| x.to_owned()).collect(),
             // TODO: parse message body
             body: String::from_utf8(message.body.to_vec())?,
         };
