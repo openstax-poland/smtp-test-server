@@ -1,5 +1,9 @@
 import * as React from 'react'
 
+import DateTime from '~/src/components/DateTime'
+import GroupOrMailbox from '~/src/components/GroupOrMailbox'
+import Mailbox from '~/src/components/Mailbox'
+
 import { Message } from '~/src/data'
 
 import './index.css'
@@ -17,8 +21,10 @@ export default function MailList({ messages, onSelect }: Props) {
         onSelect(message)
     }, [onSelect, setSelected])
 
-    return <div className="mail-list">
-        <table className="mail-list">
+    const className = selected == null ? "mail-list" : "mail-list selected"
+
+    return <div className={className}>
+        <table>
             <thead>
                 <tr>
                     <th className="stretch">Subject</th>
@@ -54,8 +60,14 @@ function Item({ message, selected, onSelect }: ItemProps) {
 
     return <tr className={selected ? 'selected' : undefined} onClick={onClick}>
         <td className="subject">{message.subject}</td>
-        <td className="from">{message.from}</td>
-        <td className="to">{message.to}</td>
-        <td className="date">date</td>
+        <td className="from">
+            <Mailbox format="short" mailbox={message.from[0]} />
+        </td>
+        <td className="to">
+            <GroupOrMailbox format="short" group={message.to[0]} />
+        </td>
+        <td className="date">
+            <DateTime format="tiny" date={new Date(message.date * 1000)} />
+        </td>
     </tr>
 }

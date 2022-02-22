@@ -1,2 +1,21 @@
+* {
+    box-sizing: content-box;
+}
+
+body, #app {
+    position: fixed 0 0 0 0;
+    padding: 0;
+    margin: 0;
+}
+
 #app {
+    display: flex;
+
+    > div {
+        flex: 1;
+    }
+
+    > :not(:first-child) {
+        margin-left: 8px;
+    }
 }

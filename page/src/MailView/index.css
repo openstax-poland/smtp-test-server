@@ -1,0 +1,13 @@
+div.mail-view {
+    overflow: auto;
+
+    > div.details {
+        display: grid;
+        grid-template-columns: min-content 1fr;
+        column-gap: 8px;
+
+        .field-name {
+            text-align: right;
+        }
+    }
+}

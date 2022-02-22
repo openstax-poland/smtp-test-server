@@ -1,0 +1,13 @@
+span.mailbox {
+    white-space: nowrap;
+
+    > span.address {
+        &::before {
+            content: ' <';
+        }
+
+        &::after {
+            content: '>';
+        }
+    }
+}

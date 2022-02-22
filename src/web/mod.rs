@@ -15,8 +15,8 @@ use crate::{state::{StateRef, Message}, mail::{Mailbox, AddressOrGroup}};
 pub async fn start(state: StateRef) -> Result<()> {
     let app = Router::new()
         .route("/messages", get(list_messages))
-        .route("/messages/stream", get(message_stream))
         .route("/messages/:id", get(message))
+        .route("/subscribe", get(message_stream))
         .layer(AddExtensionLayer::new(state))
     ;
 

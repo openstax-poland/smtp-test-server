@@ -1,5 +1,9 @@
 .mail-list {
-    overflow-y: scroll;
+    overflow-y: auto;
+
+    &.selected {
+        border-right: 1px solid black;
+    }
 
     table {
         border-collapse: collapse;
@@ -12,6 +16,8 @@
 
         background-color: white;
         box-shadow: black 1px 1px;
+
+        text-align: left;
     }
 
     th.stretch {
@@ -22,12 +28,18 @@
         background-color: rgba(0, 0, 0, 0.04);
     }
 
-    tr:hover {
-        cursor: pointer;
-        background-color: color-mod(skyblue alpha(0.4));
+    td, th {
+        padding: * 8px;
     }
 
-    tr.selected {
-        font-weight: bold;
+    tbody {
+        tr:hover {
+            cursor: pointer;
+            background-color: color-mod(skyblue alpha(0.4));
+        }
+
+        tr.selected {
+            font-weight: bold;
+        }
     }
 }
