@@ -1,12 +1,13 @@
 use std::{collections::{HashMap, hash_map::Entry}, sync::Arc};
 use thiserror::Error;
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::{mail, syntax::SyntaxError};
 
 pub struct State {
     messages: RwLock<HashMap<String, Arc<Message>>>,
+    on_message: broadcast::Sender<Arc<Message>>,
 }
 
 pub type StateRef = Arc<State>;
@@ -22,6 +23,7 @@ impl State {
     pub fn new() -> StateRef {
         Arc::new(State {
             messages: RwLock::new(HashMap::default()),
+            on_message: broadcast::channel(16).0,
         })
     }
 
@@ -31,6 +33,10 @@ impl State {
 
     pub async fn get_message(&self, id: &str) -> Option<Arc<Message>> {
         self.messages.read().await.get(id).cloned()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Message>> {
+        self.on_message.subscribe()
     }
 
     pub async fn submit_message(&self, message: &[u8]) -> Result<(), SubmitMessageError> {
@@ -54,9 +60,11 @@ impl State {
         match self.messages.write().await.entry(message.id.clone()) {
             Entry::Occupied(_) => return Err(SubmitMessageError::DuplicateMailId),
             Entry::Vacant(entry) => {
-                entry.insert(message);
+                entry.insert(message.clone());
             }
         }
+
+        let _ = self.on_message.send(message);
 
         Ok(())
     }

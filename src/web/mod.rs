@@ -1,5 +1,11 @@
 use anyhow::Result;
-use axum::{AddExtensionLayer, Json, Router, extract::{Extension, Path}, http::StatusCode, routing::get};
+use axum::{
+    AddExtensionLayer, Json, Router,
+    extract::{Extension, Path, ws},
+    http::StatusCode,
+    routing::get,
+    response::IntoResponse,
+};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -8,6 +14,7 @@ use crate::state::{StateRef, Message};
 pub async fn start(state: StateRef) -> Result<()> {
     let app = Router::new()
         .route("/messages", get(list_messages))
+        .route("/messages/stream", get(message_stream))
         .route("/messages/:id", get(message))
         .layer(AddExtensionLayer::new(state))
     ;
@@ -19,7 +26,7 @@ pub async fn start(state: StateRef) -> Result<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct MessageData {
     id: String,
     subject: Option<String>,
@@ -49,4 +56,44 @@ async fn message(Extension(state): Extension<StateRef>, Path(id): Path<String>)
         Some(message) => Ok(message.body.clone()),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+async fn message_stream(
+    Extension(state): Extension<StateRef>,
+    ws: ws::WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_socket(state, socket))
+}
+
+async fn handle_socket(state: StateRef, mut socket: ws::WebSocket) {
+    log::debug!("listener connected");
+
+    let mut messages = state.subscribe();
+
+    loop {
+        tokio::select! {
+            msg = messages.recv() => {
+                let msg = match msg {
+                    Ok(msg) => MessageData::from(&*msg),
+                    Err(_) => break,
+                };
+
+                log::trace!("notifying listener of {msg:?}");
+                let msg = serde_json::to_string(&msg).expect("failed to convert message to JSON");
+
+                if socket.send(ws::Message::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+
+            msg = socket.recv() => {
+                log::trace!("received message from client: {msg:?}");
+                break;
+            }
+        }
+    }
+
+    let _ = socket.close().await;
+
+    log::debug!("listener disconnected");
 }
