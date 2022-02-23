@@ -4,7 +4,7 @@ use axum::{
     extract::{Extension, Path, ws},
     http::StatusCode,
     routing::get,
-    response::IntoResponse,
+    response::{IntoResponse, Response}, body,
 };
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -17,6 +17,8 @@ pub async fn start(state: StateRef) -> Result<()> {
         .route("/messages", get(list_messages))
         .route("/messages/:id", get(message))
         .route("/subscribe", get(message_stream))
+        .route("/", get(index))
+        .route("/:file", get(page_file))
         .layer(AddExtensionLayer::new(state))
     ;
 
@@ -104,4 +106,35 @@ async fn handle_socket(state: StateRef, mut socket: ws::WebSocket) {
     let _ = socket.close().await;
 
     log::debug!("listener disconnected");
+}
+
+async fn index() -> &'static File {
+    PAGE_DATA.iter()
+        .find(|file| file.name == "index.html")
+        .unwrap()
+}
+
+async fn page_file(Path(name): Path<String>) -> Result<&'static File, StatusCode> {
+    PAGE_DATA.iter().find(|file| file.name == name).ok_or(StatusCode::NOT_FOUND)
+}
+
+struct File {
+    name: &'static str,
+    data: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/page_data.rs"));
+
+impl IntoResponse for &'_ File {
+    fn into_response(self) -> Response {
+        Response::builder()
+            .header("Content-Type", match self.name.rsplit('.').next().unwrap() {
+                "css" => "text/css",
+                "html" => "text/html",
+                "js" => "application/javascript",
+                _ => "application/octet-stream"
+            })
+            .body(body::boxed(body::Full::new(body::Bytes::from_static(self.data))))
+            .unwrap()
+    }
 }
