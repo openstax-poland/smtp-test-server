@@ -4,19 +4,19 @@ use anyhow::{Context, Result};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
-use crate::{state::StateRef, util};
+use crate::{state::StateRef, util, config};
 use super::proto::{Connection, Response};
 
-pub async fn start(state: StateRef) -> Result<()> {
+pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
     // IPv4 TCP listener on port 587 (per RFC 6409)
-    let listener_ipv4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 587))
+    let listener_ipv4 = TcpListener::bind((Ipv4Addr::LOCALHOST, config.port))
         .await
-        .context("could not bind TCP socket on localhost:587")?;
+        .with_context(|| format!("could not bind TCP socket on localhost:{}", config.port))?;
 
     // IPv6 TCP listener on port 587 (per RFC 6409)
-    let listener_ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 587))
+    let listener_ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, config.port))
         .await
-        .context("could not bind TCP socket on localhost:587")?;
+        .with_context(|| format!("could not bind TCP socket on localhost:{}", config.port))?;
 
     tokio::try_join!(
         handle_listener(state.clone(), listener_ipv4),

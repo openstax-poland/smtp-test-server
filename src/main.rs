@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::future::Future;
 
+mod config;
 mod mail;
 mod smtp;
 mod state;
@@ -12,10 +13,11 @@ mod web;
 async fn main() -> Result<()> {
     env_logger::init();
 
+    let config = config::load()?;
     let state = state::State::new();
 
-    let smtp = try_spawn(smtp::server::start(state.clone()));
-    let web = web::start(state);
+    let smtp = try_spawn(smtp::server::start(config.smtp, state.clone()));
+    let web = web::start(config.http, state);
 
     tokio::try_join!(smtp, web)?;
 

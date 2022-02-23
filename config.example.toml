@@ -1,0 +1,9 @@
+# SMTP server configuration
+[smtp]
+# Port to run the SMTP server on
+port = 587
+
+# HTTP server configuration
+[http]
+# Port to run the HTTP server on
+port = 80

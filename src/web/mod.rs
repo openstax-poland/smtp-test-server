@@ -8,11 +8,11 @@ use axum::{
 };
 use serde::Serialize;
 use time::OffsetDateTime;
-use std::sync::Arc;
+use std::{sync::Arc, net::{SocketAddr, Ipv4Addr}};
 
-use crate::{state::{StateRef, Message}, mail::{Mailbox, AddressOrGroup}};
+use crate::{state::{StateRef, Message}, mail::{Mailbox, AddressOrGroup}, config};
 
-pub async fn start(state: StateRef) -> Result<()> {
+pub async fn start(config: config::Http, state: StateRef) -> Result<()> {
     let app = Router::new()
         .route("/messages", get(list_messages))
         .route("/messages/:id", get(message))
@@ -22,7 +22,9 @@ pub async fn start(state: StateRef) -> Result<()> {
         .layer(AddExtensionLayer::new(state))
     ;
 
-    axum::Server::bind(&"0.0.0.0:80".parse().unwrap())
+    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), config.port);
+
+    axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await?;
 

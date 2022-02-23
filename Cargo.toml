@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+argh = "0.1"
 axum = { version = "0.4", features = ["ws"] }
 env_logger = { version = "0.9", default-features = false, features = ["atty", "termcolor"] }
 log = "0.4"
@@ -13,3 +14,4 @@ serde_json = "1.0"
 thiserror = "1.0"
 time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1.16", features = ["io-util", "macros", "net", "rt-multi-thread"] }
+toml = "0.5"
