@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 use std::{str, borrow::Cow};
 use serde::Serialize;
 use time::{Weekday, Month, UtcOffset, Time, Date, OffsetDateTime, PrimitiveDateTime};

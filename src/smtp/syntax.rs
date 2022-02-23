@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 use std::{fmt, net::{IpAddr, Ipv4Addr, Ipv6Addr}, str};
 
 use crate::syntax::*;

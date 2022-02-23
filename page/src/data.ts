@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 /** Single email message */
 export interface Message {
     /** Message ID */

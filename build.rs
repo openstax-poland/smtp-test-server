@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 use std::{io::{self, Write, BufWriter}, path::Path, env, fs::{File, self}};
 
 fn main() -> io::Result<()> {

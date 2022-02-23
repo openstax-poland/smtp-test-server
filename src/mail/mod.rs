@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 //! Implementation of [RFC 5322](
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 

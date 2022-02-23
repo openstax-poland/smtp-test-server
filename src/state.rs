@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 use std::{collections::{HashMap, hash_map::Entry}, sync::Arc};
 use thiserror::Error;
 use time::{OffsetDateTime, UtcOffset};

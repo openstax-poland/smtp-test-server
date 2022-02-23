@@ -1,3 +1,7 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
 //! SMTP protocol state machine
 
 use std::{io::Write as _, fmt, net::SocketAddr, mem};
