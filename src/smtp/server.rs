@@ -18,6 +18,9 @@ pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
         .await
         .with_context(|| format!("could not bind TCP socket on localhost:{}", config.port))?;
 
+    log::info!("Started SMTP server on {}", listener_ipv4.local_addr()?);
+    log::info!("Started SMTP server on {}", listener_ipv6.local_addr()?);
+
     tokio::try_join!(
         handle_listener(state.clone(), listener_ipv4),
         handle_listener(state.clone(), listener_ipv6),

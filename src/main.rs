@@ -11,7 +11,10 @@ mod web;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .parse_default_env()
+        .init();
 
     let config = config::load()?;
     let state = state::State::new();
