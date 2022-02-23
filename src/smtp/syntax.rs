@@ -13,7 +13,7 @@ pub enum ReversePath {
 }
 
 impl<'a> ReversePathRef<'a> {
-    pub fn to_owned(self) -> ReversePath {
+    pub fn to_owned(&self) -> ReversePath {
         match self {
             ReversePathRef::Null => ReversePath::Null,
             ReversePathRef::Mailbox(mb) => ReversePath::Mailbox(mb.to_owned()),
@@ -51,7 +51,7 @@ pub enum ForwardPath {
 }
 
 impl<'a> ForwardPathRef<'a> {
-    pub fn to_owned(self) -> ForwardPath {
+    pub fn to_owned(&self) -> ForwardPath {
         match self {
             ForwardPathRef::Postmaster(domain) => ForwardPath::Postmaster(domain.map(String::from)),
             ForwardPathRef::Mailbox(mb) => ForwardPath::Mailbox(mb.to_owned()),
@@ -153,8 +153,8 @@ pub enum DomainOrAddr {
 }
 
 impl<'a> DomainRefOrAddr<'a> {
-    pub fn to_owned(self) -> DomainOrAddr {
-        match self {
+    pub fn to_owned(&self) -> DomainOrAddr {
+        match *self {
             DomainRefOrAddr::Domain(domain) => DomainOrAddr::Domain(domain.into()),
             DomainRefOrAddr::Addr(addr) => DomainOrAddr::Addr(addr),
         }
@@ -345,7 +345,7 @@ pub struct Mailbox {
 }
 
 impl<'a> MailboxRef<'a> {
-    pub fn to_owned(self) -> Mailbox {
+    pub fn to_owned(&self) -> Mailbox {
         Mailbox {
             local: self.local.into(),
             location: self.location.to_owned(),

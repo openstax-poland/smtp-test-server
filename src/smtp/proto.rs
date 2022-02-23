@@ -72,7 +72,7 @@ impl Connection {
     }
 
     /// Handle single line
-    pub async fn line<'a>(&'a mut self) -> Option<Response<'a>> {
+    pub async fn line(&mut self) -> Option<Response<'_>> {
         if self.state == State::Data {
             return self.data_line().await;
         }
@@ -142,7 +142,7 @@ impl Connection {
         Response::OK_250
     }
 
-    async fn data_line<'a>(&'a mut self) -> Option<Response<'a>> {
+    async fn data_line(&mut self) -> Option<Response<'_>> {
         log::trace!(">> {}", util::maybe_ascii(&self.message[self.message_length..]));
 
         if self.message.ends_with(b"\r\n.\r\n") {
@@ -204,7 +204,7 @@ impl Connection {
 
     // -------------------------------------------------- message processing ---
 
-    async fn submit_message<'a>(&'a mut self) -> Response<'a> {
+    async fn submit_message(&mut self) -> Response<'_> {
         if !self.message.iter().all(u8::is_ascii) {
             let at = self.message.iter().position(|c| !c.is_ascii()).unwrap();
             log::trace!("not everything is ASCII: {} at {at}", self.message[at]);

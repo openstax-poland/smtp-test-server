@@ -159,7 +159,7 @@ impl<'a> Buffer<'a> {
         let items = self.take_matching(|slf| {
             let mut count = 0;
 
-            while let Some(_) = slf.maybe(T::parse) {
+            while slf.maybe(T::parse).is_some() {
                 count += 1;
             }
 
@@ -216,11 +216,11 @@ pub struct ListOf<'a, T> {
 }
 
 impl<'a, T> ListOf<'a, T> {
-    fn new(separator: &'static [u8], items: &'a [u8]) -> Self {
+    const fn new(separator: &'static [u8], items: &'a [u8]) -> Self {
         ListOf { items, separator, _type: PhantomData }
     }
 
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         ListOf::new(b"", b"")
     }
 

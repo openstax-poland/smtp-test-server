@@ -1,10 +1,7 @@
 //! Implementation of [RFC 5322](
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 
-use time::Date;
-
 use crate::syntax::*;
-
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
 pub use self::syntax::{Address, AddressOrGroup, Mailbox};
@@ -103,9 +100,9 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
     }
 
     let origination_date = origination_date
-        .ok_or(SyntaxErrorKind::custom("missing required header Origination-Date").at(0))?;
+        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Origination-Date").at(0))?;
     let from = from
-        .ok_or(SyntaxErrorKind::custom("missing required header From").at(0))?;
+        .ok_or_else(|| SyntaxErrorKind::custom("missing required header From").at(0))?;
 
     Ok(ParsedMessage {
         trace,
@@ -222,9 +219,9 @@ fn parse_resent_block<'a>(header: &mut Buffer<'a>) -> Result<Option<ResentInfo<'
     }
 
     let date = date
-        .ok_or(SyntaxErrorKind::custom("missing required header Resent-Date").at(offset))?;
+        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Resent-Date").at(offset))?;
     let from = from
-        .ok_or(SyntaxErrorKind::custom("missing required header Resent-From").at(offset))?;
+        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Resent-From").at(offset))?;
 
     Ok(Some(ResentInfo {
         date,

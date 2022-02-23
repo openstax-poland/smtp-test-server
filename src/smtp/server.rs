@@ -74,7 +74,7 @@ async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Resul
         };
 
         if let Some(response) = response {
-            log::trace!("<< {}", util::maybe_ascii(&response.data));
+            log::trace!("<< {}", util::maybe_ascii(response.data));
             socket.write_all(response.data).await?;
             socket.flush().await?;
 
