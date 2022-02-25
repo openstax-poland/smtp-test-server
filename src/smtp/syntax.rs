@@ -146,6 +146,7 @@ pub fn parameter<'a>(buf: &mut Buffer<'a>) -> Result<(&'a [u8], &'a [u8])> {
 
 // Argument       = Atom
 
+#[derive(Debug)]
 pub enum DomainRefOrAddr<'a> {
     Domain(&'a str),
     Addr(IpAddr),

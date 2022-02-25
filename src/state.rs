@@ -22,8 +22,11 @@ pub struct Message {
     pub from: Vec<Mailbox>,
     pub subject: Option<String>,
     pub to: Vec<AddressOrGroup>,
-    // TODO: parse message body
-    pub body: String,
+    pub body: MessageBody,
+}
+
+pub enum MessageBody {
+    Unknown(String),
 }
 
 impl State {
@@ -56,8 +59,11 @@ impl State {
             from: message.from.iter().map(|x| x.to_owned()).collect(),
             subject: message.subject,
             to: message.to.iter().map(|x| x.to_owned()).collect(),
-            // TODO: parse message body
-            body: String::from_utf8(message.body.to_vec())?,
+            body: match message.body {
+                mail::Body::Unknown(body) =>
+                    MessageBody::Unknown(String::from_utf8(body.to_vec())?),
+                mail::Body::Mime(_) => todo!(),
+            },
         };
 
         self.add_message(message).await

@@ -14,7 +14,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use std::{sync::Arc, net::{SocketAddr, Ipv4Addr}};
 
-use crate::{state::{StateRef, Message}, mail::{Mailbox, AddressOrGroup}, config};
+use crate::{state::{StateRef, Message, MessageBody}, mail::{Mailbox, AddressOrGroup}, config};
 
 pub async fn start(config: config::Http, state: StateRef) -> Result<()> {
     let app = Router::new()
@@ -69,7 +69,9 @@ async fn list_messages(Extension(state): Extension<StateRef>) -> Json<Vec<Messag
 async fn message(Extension(state): Extension<StateRef>, Path(id): Path<String>)
 -> Result<String, StatusCode> {
     match state.get_message(&id).await {
-        Some(message) => Ok(message.body.clone()),
+        Some(message) => match message.body {
+            MessageBody::Unknown(ref body) => Ok(body.clone()),
+        },
         None => Err(StatusCode::NOT_FOUND),
     }
 }

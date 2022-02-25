@@ -6,7 +6,7 @@ use std::{str, borrow::Cow};
 use serde::Serialize;
 use time::{Weekday, Month, UtcOffset, Time, Date, OffsetDateTime, PrimitiveDateTime};
 
-use crate::syntax::*;
+use crate::{syntax::*, mime::syntax as mime};
 
 /// Folding white space
 fn fws(buf: &mut Buffer) -> Result<()> {
@@ -26,7 +26,7 @@ fn fws(buf: &mut Buffer) -> Result<()> {
     }
 }
 
-fn comment(buf: &mut Buffer) -> Result<()> {
+pub fn comment(buf: &mut Buffer) -> Result<()> {
     // comment = "(" *([FWS] ccontent) [FWS] ")"
     buf.atomic(|buf| {
         buf.expect(b"(")?;
@@ -54,7 +54,7 @@ fn comment(buf: &mut Buffer) -> Result<()> {
 }
 
 /// Comment or folding white space
-fn cfws(buf: &mut Buffer) -> Result<()> {
+pub fn cfws(buf: &mut Buffer) -> Result<()> {
     // CFWS = (1*([FWS] comment) [FWS]) / FWS
     let value = buf.take_matching(|buf| {
         buf.maybe(fws);
@@ -94,7 +94,7 @@ fn dot_atom<'a>(buf: &mut Buffer<'a>) -> Result<&'a str> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Quoted<'a>(&'a str);
+pub struct Quoted<'a>(pub &'a str);
 
 impl<'a> Quoted<'a> {
     pub fn unquote(&self) -> Cow<'a, str> {
@@ -121,7 +121,7 @@ impl<'a> Quoted<'a> {
     }
 }
 
-fn quoted_string<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
+pub fn quoted_string<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
     // quoted-string = [CFWS]
     //                 DQUOTE *([FWS] qcontent) [FWS] DQUOTE
     //                 [CFWS]
@@ -226,7 +226,7 @@ impl<'a> Folded<'a> {
     }
 }
 
-fn unstructured<'a>(buf: &mut Buffer<'a>) -> Result<Folded<'a>> {
+pub fn unstructured<'a>(buf: &mut Buffer<'a>) -> Result<Folded<'a>> {
     // unstructured = (*([FWS] VCHAR) *WSP) / obs-unstruct
 
     let value = buf.take_matching(|buf| {
@@ -776,6 +776,7 @@ pub enum Header<'a> {
     ResentMessageId(MessageIdRef<'a>),
     ReturnPath(PathRef<'a>),
     Received(Received<'a>),
+    Mime(mime::Header<'a>),
     Optional {
         name: &'a str,
         body: Folded<'a>,
@@ -831,6 +832,8 @@ pub fn field<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
             Header::ReturnPath(path(buf)?)
         } else if name.eq_ignore_ascii_case("Received") {
             Header::Received(received_value(buf)?)
+        } else if let Some(header) = mime::header(name, buf)? {
+            Header::Mime(header)
         } else {
             Header::Optional { name, body: unstructured(buf)? }
         };
@@ -869,7 +872,7 @@ impl<'a> Parse<'a> for MessageIdRef<'a> {
     }
 }
 
-fn msg_id<'a>(buf: &mut Buffer<'a>) -> Result<MessageIdRef<'a>> {
+pub fn msg_id<'a>(buf: &mut Buffer<'a>) -> Result<MessageIdRef<'a>> {
     // msg-id = [CFWS] "<" id-left "@" id-right ">" [CFWS]
     buf.atomic(|buf| {
         buf.maybe(cfws);

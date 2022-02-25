@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0"
 argh = "0.1"
 axum = { version = "0.4", features = ["ws"] }
+base64 = "0.13"
 env_logger = { version = "0.9", default-features = false, features = ["atty", "termcolor"] }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }

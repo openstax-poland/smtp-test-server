@@ -7,6 +7,7 @@ use std::future::Future;
 
 mod config;
 mod mail;
+mod mime;
 mod smtp;
 mod state;
 mod syntax;

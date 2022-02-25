@@ -13,6 +13,7 @@ use super::syntax::{self, DomainRefOrAddr, ForwardPathRef, ReversePathRef, Rever
 pub struct Connection {
     global: StateRef,
     name: SocketAddr,
+    remote: SocketAddr,
     state: State,
     reverse_path: Option<ReversePath>,
     forward_path: Vec<ForwardPath>,
@@ -46,10 +47,11 @@ enum State {
 }
 
 impl Connection {
-    pub fn new(global: StateRef, name: SocketAddr) -> Connection {
+    pub fn new(global: StateRef, name: SocketAddr, remote: SocketAddr) -> Connection {
         Connection {
             global,
             name,
+            remote,
             state: State::Handshake,
             reverse_path: None,
             forward_path: vec![],
@@ -116,6 +118,7 @@ impl Connection {
     // ---------------------------------------------------- command handlers ---
 
     fn handshake(&mut self, hello: Hello) -> Response {
+        log::info!("client {:?} ({}) connected", hello.client, self.remote);
         self.reset_buffers();
 
         let mut rsp = Response::new_multiline(&mut self.response, 250,

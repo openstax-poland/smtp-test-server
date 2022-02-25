@@ -5,12 +5,12 @@
 //! Implementation of [RFC 5322](
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 
-use crate::syntax::*;
+use crate::{syntax::*, mime};
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
 pub use self::syntax::{Address, AddressOrGroup, Mailbox};
 
-mod syntax;
+pub mod syntax;
 
 pub struct ParsedMessage<'a> {
     pub trace: Vec<Trace<'a>>,
@@ -20,7 +20,7 @@ pub struct ParsedMessage<'a> {
     pub sender: Option<MailboxRef<'a>>,
     pub to: AddressOrGroupList<'a>,
     pub subject: Option<String>,
-    pub body: &'a [u8],
+    pub body: Body<'a>,
 }
 
 pub struct Trace<'a> {
@@ -37,6 +37,21 @@ pub struct ResentInfo<'a> {
     pub cc: AddressOrGroupList<'a>,
     pub bcc: AddressOrGroupList<'a>,
     pub id: Option<String>,
+}
+
+/// Message body
+pub enum Body<'a> {
+    /// Unknown format
+    Unknown(&'a [u8]),
+    /// MIME (RFC 2045)
+    Mime(MimeBody<'a>),
+}
+
+pub struct MimeBody<'a> {
+    pub data: &'a [u8],
+    pub version: mime::MimeVersion,
+    pub content_type: mime::ContentType<'a>,
+    pub transfer_encoding: Option<mime::TransferEncoding>,
 }
 
 pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
@@ -61,6 +76,11 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
     let mut subject = None;
     let mut comments = vec![];
     let mut keywords = vec![];
+    let mut mime_version = None;
+    let mut content_type = None;
+    let mut transfer_encoding = None;
+    let mut content_id = None;
+    let mut content_description = None;
 
     while !header.is_empty() {
         let offset = header.offset();
@@ -99,7 +119,21 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
             Header::ResentMessageId(_) => todo!(),
             Header::ReturnPath(_) => todo!(),
             Header::Received(_) => todo!(),
-            Header::Optional { .. } => {}
+            Header::Mime(header) => match header {
+                mime::Header::Version(value) =>
+                    mime_version.set_once(offset, "MIME-Version", value)?,
+                mime::Header::ContentType(value) =>
+                    content_type.set_once(offset, "Content-Type", value)?,
+                mime::Header::ContentTransferEncoding(value) =>
+                    transfer_encoding.set_once(offset, "Content-Transfer-Encoding", value)?,
+                mime::Header::ContentId(value) =>
+                    content_id.set_once(offset, "Content-ID", value)?,
+                mime::Header::ContentDescription(value) =>
+                    content_description.set_once(offset, "Content-Description", value)?,
+            },
+            Header::Optional { name, body } => {
+                log::trace!("unrecognized header {name}: {body:?}");
+            }
         }
     }
 
@@ -107,6 +141,16 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
         .ok_or_else(|| SyntaxErrorKind::custom("missing required header Origination-Date").at(0))?;
     let from = from
         .ok_or_else(|| SyntaxErrorKind::custom("missing required header From").at(0))?;
+
+    let body = match mime_version {
+        None => Body::Unknown(body),
+        Some(version) => Body::Mime(MimeBody {
+            data: body,
+            version,
+            content_type: content_type.unwrap_or_default(),
+            transfer_encoding,
+        }),
+    };
 
     Ok(ParsedMessage {
         trace,

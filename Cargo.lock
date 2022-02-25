@@ -658,6 +658,7 @@ dependencies = [
  "anyhow",
  "argh",
  "axum",
+ "base64",
  "env_logger",
  "log",
  "serde",

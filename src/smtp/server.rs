@@ -27,7 +27,7 @@ pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
         let state = state.clone();
 
         tokio::spawn(async move {
-            if let Err(err) = handle_client(state, socket).await {
+            if let Err(err) = handle_client(state, socket, addr).await {
                 log::error!("error serving {addr}: {err:?}");
             }
         });
@@ -35,8 +35,8 @@ pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
 }
 
 /// Handle one SMTP connection
-async fn handle_client(state: StateRef, mut socket: TcpStream) -> Result<()> {
-    let mut smtp = Connection::new(state, socket.local_addr()?);
+async fn handle_client(state: StateRef, mut socket: TcpStream, addr: SocketAddr) -> Result<()> {
+    let mut smtp = Connection::new(state, socket.local_addr()?, addr);
 
     {
         let response = smtp.connect();
