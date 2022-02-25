@@ -129,25 +129,25 @@ pub fn quoted_string<'a>(buf: &mut Buffer<'a>) -> Result<Quoted<'a>> {
         buf.maybe(cfws);
         buf.expect(b"\"")?;
 
-        let mut cursor = *buf;
-        cursor.maybe(fws);
-
         // qcontent    = qtext / quoted-pair
         // qtext       = %d33 / %d35-91 / %d93-126 / obs-qtext
         // quoted-pair = ("\" (VCHAR / WSP)) / obs-qp
-        while !cursor.is_empty() && !cursor.starts_with(b"\"") {
-            match cursor[0] {
-                33 | 35..=91 | 93..=126 => buf.advance(1),
-                b'\\' if cursor.len() >= 2 => match buf[1] {
-                    0x21..=0x7e | b' ' | b'\t' => buf.advance(2),
-                    _ => return buf.error("invalid escape sequence"),
-                },
-                _ => return buf.error("illegal character in quoted string"),
+        let value = buf.take_matching(|buf| {
+            buf.maybe(fws);
+            while !buf.is_empty() && !buf.starts_with(b"\"") {
+                match buf[0] {
+                    33 | 35..=91 | 93..=126 => buf.advance(1),
+                    b'\\' if buf.len() >= 2 => match buf[1] {
+                        0x21..=0x7e | b' ' | b'\t' => buf.advance(2),
+                        _ => return buf.error("invalid escape sequence"),
+                    },
+                    _ => return buf.error("illegal character in quoted string"),
+                }
             }
-        }
+            Ok(())
+        })?;
 
-        let length = buf.len() - cursor.len();
-        let content = str::from_utf8(buf.take(length)).unwrap();
+        let content = str::from_utf8(value).unwrap();
 
         buf.expect(b"\"")?;
         buf.maybe(cfws);
