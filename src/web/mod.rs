@@ -26,7 +26,7 @@ pub async fn start(config: config::Http, state: StateRef) -> Result<()> {
         .layer(AddExtensionLayer::new(state))
     ;
 
-    let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), config.port);
+    let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), config.port);
 
     let server = axum::Server::bind(&addr).serve(app.into_make_service());
     log::info!("Started HTTP server on {addr}");

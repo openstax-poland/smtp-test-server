@@ -5,35 +5,20 @@
 //! SMTP server
 
 use anyhow::{Context, Result};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv6Addr, SocketAddr};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
 use crate::{state::StateRef, util, config};
 use super::proto::{Connection, Response};
 
 pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
-    // IPv4 TCP listener on port 587 (per RFC 6409)
-    let listener_ipv4 = TcpListener::bind((Ipv4Addr::LOCALHOST, config.port))
-        .await
-        .with_context(|| format!("could not bind TCP socket on localhost:{}", config.port))?;
-
     // IPv6 TCP listener on port 587 (per RFC 6409)
-    let listener_ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, config.port))
+    let listener = TcpListener::bind((Ipv6Addr::UNSPECIFIED, config.port))
         .await
-        .with_context(|| format!("could not bind TCP socket on localhost:{}", config.port))?;
+        .with_context(|| format!("could not bind TCP socket on [{}]:{}", Ipv6Addr::UNSPECIFIED, config.port))?;
 
-    log::info!("Started SMTP server on {}", listener_ipv4.local_addr()?);
-    log::info!("Started SMTP server on {}", listener_ipv6.local_addr()?);
+    log::info!("Started SMTP server on {}", listener.local_addr()?);
 
-    tokio::try_join!(
-        handle_listener(state.clone(), listener_ipv4),
-        handle_listener(state.clone(), listener_ipv6),
-    )?;
-
-    Ok(())
-}
-
-async fn handle_listener(state: StateRef, listener: TcpListener) -> Result<()> {
     loop {
         let (socket, addr) = listener.accept()
             .await
