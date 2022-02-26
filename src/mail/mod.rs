@@ -5,7 +5,7 @@
 //! Implementation of [RFC 5322](
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 
-use crate::{syntax::*, mime};
+use crate::{syntax::*, mime, util::SetOnce};
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
 pub use self::syntax::{Address, AddressOrGroup, Mailbox};
@@ -44,14 +44,7 @@ pub enum Body<'a> {
     /// Unknown format
     Unknown(&'a [u8]),
     /// MIME (RFC 2045)
-    Mime(MimeBody<'a>),
-}
-
-pub struct MimeBody<'a> {
-    pub data: &'a [u8],
-    pub version: mime::MimeVersion,
-    pub content_type: mime::ContentType<'a>,
-    pub transfer_encoding: Option<mime::TransferEncoding>,
+    Mime(mime::Unparsed<'a>),
 }
 
 pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
@@ -144,7 +137,7 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
 
     let body = match mime_version {
         None => Body::Unknown(body),
-        Some(version) => Body::Mime(MimeBody {
+        Some(version) => Body::Mime(mime::Unparsed {
             data: body,
             version,
             content_type: content_type.unwrap_or_default(),
@@ -280,20 +273,4 @@ fn parse_resent_block<'a>(header: &mut Buffer<'a>) -> Result<Option<ResentInfo<'
         bcc: bcc.unwrap_or_default(),
         id,
     }))
-}
-
-trait SetOnce<T> {
-    fn set_once(&mut self, offset: usize, header: &str, value: T) -> Result<(), SyntaxError>;
-}
-
-impl<T> SetOnce<T> for Option<T> {
-    fn set_once(&mut self, offset: usize, header: &str, value: T) -> Result<(), SyntaxError> {
-        match self {
-            Some(_) => Err(SyntaxErrorKind::custom(format!("duplicate header {header}")).at(offset)),
-            None => {
-                *self = Some(value);
-                Ok(())
-            }
-        }
-    }
 }

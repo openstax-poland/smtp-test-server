@@ -48,8 +48,22 @@ impl Default for ContentType<'_> {
         ContentType {
             type_: "text",
             subtype: "plain",
-            parameters: b"charset=us-ascii",
+            parameters: b";charset=us-ascii",
         }
+    }
+}
+
+impl<'a> ContentType<'a> {
+    pub fn parameters(&self) -> impl Iterator<Item = Parameter<'a>> {
+        let mut buf = Buffer::new(self.parameters);
+
+        std::iter::from_fn(move || {
+            if buf.expect(b";").is_ok() {
+                Some(parameter(&mut buf).unwrap())
+            } else {
+                None
+            }
+        })
     }
 }
 

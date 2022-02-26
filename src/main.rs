@@ -5,6 +5,9 @@
 use anyhow::Result;
 use std::future::Future;
 
+#[macro_use]
+mod macros;
+
 mod config;
 mod mail;
 mod mime;

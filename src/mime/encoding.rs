@@ -1,4 +1,9 @@
-use std::{error::Error, fmt};
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
+use std::{error::Error, fmt, borrow::Cow};
+use thiserror::Error;
 
 use crate::util;
 
@@ -140,6 +145,60 @@ impl Error for DecodeError {
             DecodeErrorKind::Base64(ref error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Charset {
+    UsAscii,
+    Iso8859_2,
+    Iso8859_3,
+    Iso8859_4,
+    Iso8859_5,
+    Iso8859_6,
+    Iso8859_7,
+    Iso8859_8,
+    Iso8859_10,
+    Iso8859_13,
+    Iso8859_14,
+    Iso8859_15,
+    Iso8859_16,
+    Utf8,
+}
+
+#[derive(Debug, Error)]
+#[error("malformed text data")]
+pub struct CharsetError;
+
+impl Charset {
+    pub fn decode(self, data: &[u8]) -> Result<Cow<str>, CharsetError> {
+        use encoding_rs::*;
+
+        let charset = match self {
+            Charset::UsAscii => {
+                return if data.iter().all(u8::is_ascii) {
+                    Ok(std::str::from_utf8(data).unwrap().into())
+                } else {
+                    Err(CharsetError)
+                };
+            }
+            Charset::Iso8859_2 => ISO_8859_2,
+            Charset::Iso8859_3 => ISO_8859_3,
+            Charset::Iso8859_4 => ISO_8859_4,
+            Charset::Iso8859_5 => ISO_8859_5,
+            Charset::Iso8859_6 => ISO_8859_6,
+            Charset::Iso8859_7 => ISO_8859_7,
+            Charset::Iso8859_8 => ISO_8859_8,
+            Charset::Iso8859_10 => ISO_8859_10,
+            Charset::Iso8859_13 => ISO_8859_13,
+            Charset::Iso8859_14 => ISO_8859_14,
+            Charset::Iso8859_15 => ISO_8859_15,
+            Charset::Iso8859_16 => ISO_8859_16,
+            Charset::Utf8 =>
+                return std::str::from_utf8(data).map(Cow::from).map_err(|_| CharsetError),
+        };
+
+        charset.decode_without_bom_handling_and_without_replacement(data).ok_or(CharsetError)
     }
 }
 

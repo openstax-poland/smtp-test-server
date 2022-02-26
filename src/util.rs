@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use crate::syntax::{SyntaxError, SyntaxErrorKind};
+
 pub fn maybe_ascii(ascii: &[u8]) -> MaybeAscii {
     MaybeAscii(ascii)
 }
@@ -35,5 +37,21 @@ impl fmt::Debug for MaybeAscii<'_> {
         }
         f.write_str("\"")?;
         Ok(())
+    }
+}
+
+pub trait SetOnce<T> {
+    fn set_once(&mut self, offset: usize, header: &str, value: T) -> Result<(), SyntaxError>;
+}
+
+impl<T> SetOnce<T> for Option<T> {
+    fn set_once(&mut self, offset: usize, header: &str, value: T) -> Result<(), SyntaxError> {
+        match self {
+            Some(_) => Err(SyntaxErrorKind::custom(format!("duplicate header {header}")).at(offset)),
+            None => {
+                *self = Some(value);
+                Ok(())
+            }
+        }
     }
 }
