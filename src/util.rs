@@ -55,3 +55,16 @@ impl<T> SetOnce<T> for Option<T> {
         }
     }
 }
+
+/// Serialize `T` using `<T as std::string::ToString>`
+pub mod as_string {
+    use serde::{Serialize, Serializer};
+
+    pub fn serialize<T, S>(value: &T, se: S) -> Result<S::Ok, S::Error>
+    where
+        T: ToString,
+        S: Serializer,
+    {
+        value.to_string().serialize(se)
+    }
+}

@@ -1,0 +1,35 @@
+/* Copyright 2022 OpenStax Poland
+ * Licensed under the MIT license. See LICENSE file in the project root for
+ * full license text.
+ */
+
+div.tabs {
+    > div.tab-row {
+        display: flex;
+
+        border-bottom: 1px solid black;
+
+        padding: * 8px;
+
+        > div.tab-button {
+            border: 1px solid black;
+
+            margin: * 2px;
+            margin-bottom: -1px;
+            padding: * 4px;
+
+            cursor: pointer;
+
+            &[data-selected="true"] {
+                border-bottom-color: white;
+                cursor: default;
+            }
+        }
+    }
+
+    > div.tab {
+        &:not([data-selected="true"]) {
+            display: none;
+        }
+    }
+}

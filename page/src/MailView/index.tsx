@@ -7,7 +7,9 @@ import * as React from 'react'
 import DateTime from '~/src/components/DateTime'
 import MailboxList from '~/src/components/MailboxList'
 
-import { Message, loadBody } from '~/src/data'
+import { Message } from '~/src/data'
+
+import MessageBody from './components/MessageBody'
 
 import './index.css'
 
@@ -16,12 +18,6 @@ interface Props {
 }
 
 export default function MailView({ message }: Props) {
-    const [body, setBody] = React.useState<string>('')
-
-    React.useEffect(() => {
-        loadBody(message.id).then(setBody)
-    }, [message.id, setBody])
-
     return <div className="mail-view">
         <div className="details">
             <Field name="From">
@@ -36,7 +32,7 @@ export default function MailView({ message }: Props) {
             </Field>
         </div>
         <div className="body">
-            <pre>{body}</pre>
+            <MessageBody message={message} />
         </div>
     </div>
 }

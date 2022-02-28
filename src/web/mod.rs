@@ -5,21 +5,29 @@
 use anyhow::Result;
 use axum::{
     AddExtensionLayer, Json, Router,
+    body,
     extract::{Extension, Path, ws},
-    http::StatusCode,
+    http::{StatusCode, Response, header::CONTENT_TYPE},
+    response::IntoResponse,
     routing::get,
-    response::{IntoResponse, Response}, body,
 };
 use serde::Serialize;
 use time::OffsetDateTime;
 use std::{sync::Arc, net::{SocketAddr, Ipv4Addr}};
 
-use crate::{state::{StateRef, Message, MessageBody}, mail::{Mailbox, AddressOrGroup}, config};
+use crate::{
+    config,
+    mail::{Mailbox, AddressOrGroup},
+    mime::{EntityData, ContentType, Entity, MultipartKind},
+    state::{StateRef, Message, MessageBody},
+    util,
+};
 
 pub async fn start(config: config::Http, state: StateRef) -> Result<()> {
     let app = Router::new()
         .route("/messages", get(list_messages))
         .route("/messages/:id", get(message))
+        .route("/messages/:id/*number", get(message_part))
         .route("/subscribe", get(message_stream))
         .route("/", get(index))
         .route("/:file", get(page_file))
@@ -43,16 +51,31 @@ struct MessageData {
     from: Vec<Mailbox>,
     subject: Option<String>,
     to: Vec<AddressOrGroup>,
+    body: BodyType,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum BodyType {
+    Data,
+    MimeMultipart,
 }
 
 impl From<&'_ Message> for MessageData {
-    fn from(Message { id, date, from, subject, to, .. }: &'_ Message) -> Self {
+    fn from(Message { id, date, from, subject, to, body, .. }: &'_ Message) -> Self {
         MessageData {
             id: id.clone(),
             date: *date,
             from: from.clone(),
             subject: subject.clone(),
             to: to.clone(),
+            body: match body {
+                MessageBody::Unknown(_) => BodyType::Data,
+                MessageBody::Mime(ref mime) => match mime.data {
+                    EntityData::Multipart(_) => BodyType::MimeMultipart,
+                    _ => BodyType::Data,
+                },
+            },
         }
     }
 }
@@ -67,13 +90,85 @@ async fn list_messages(Extension(state): Extension<StateRef>) -> Json<Vec<Messag
 }
 
 async fn message(Extension(state): Extension<StateRef>, Path(id): Path<String>)
--> Result<String, StatusCode> {
-    match state.get_message(&id).await {
-        Some(message) => match message.body {
-            MessageBody::Unknown(ref body) => Ok(body.clone()),
-        },
-        None => Err(StatusCode::NOT_FOUND),
+-> Result<impl IntoResponse, StatusCode> {
+    let message = match state.get_message(&id).await {
+        Some(message) => message,
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+
+    Ok(match message.body {
+        MessageBody::Unknown(ref body) => Response::builder()
+            .header(CONTENT_TYPE, ContentType::TEXT_PLAIN)
+            .body(to_bytes(body.as_bytes()))
+            .unwrap(),
+        MessageBody::Mime(ref entity) => entity_to_response(entity),
+    })
+}
+
+fn entity_to_response(entity: &Entity) -> Response<body::Full<body::Bytes>> {
+    match entity.data {
+        EntityData::Text(ref text) => Response::builder()
+            .header(CONTENT_TYPE, &entity.content_type)
+            .body(to_bytes(text.as_bytes()))
+            .unwrap(),
+        EntityData::Binary(ref data) => Response::builder()
+            .header(CONTENT_TYPE, &entity.content_type)
+            .body(to_bytes(data))
+            .unwrap(),
+        EntityData::Multipart(ref mp) => Response::builder()
+            .header(CONTENT_TYPE, ContentType::APPLICATION_JSON)
+            .body(body::Full::new(serde_json::to_vec(&MultipartDesc {
+                kind: mp.kind,
+                parts: mp.parts.iter().map(|entity| PartDesc {
+                    content_type: &entity.content_type,
+                }).collect(),
+            }).unwrap().into()))
+            .unwrap(),
     }
+}
+
+#[derive(Serialize)]
+struct MultipartDesc<'a> {
+    kind: MultipartKind,
+    parts: Vec<PartDesc<'a>>,
+}
+
+#[derive(Serialize)]
+struct PartDesc<'a> {
+    #[serde(with = "util::as_string", rename = "contentType")]
+    content_type: &'a ContentType,
+}
+
+async fn message_part(Extension(state): Extension<StateRef>, Path((id, path)): Path<(String, String)>)
+-> Result<impl IntoResponse, StatusCode> {
+    let message = match state.get_message(&id).await {
+        Some(message) => message,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
+    let mut entity = match message.body {
+        MessageBody::Mime(ref entity) => entity,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+
+    for part in path.split('/').skip(1) {
+        let part: usize = match part.parse() {
+            Ok(part) => part,
+            Err(_) => return Err(StatusCode::NOT_FOUND),
+        };
+
+        let mp = match entity.data {
+            EntityData::Multipart(ref mp) => mp,
+            _ => return Err(StatusCode::NOT_FOUND),
+        };
+
+        entity = match mp.parts.get(part) {
+            Some(part) => part,
+            _ => return Err(StatusCode::NOT_FOUND),
+        };
+    }
+
+    Ok(entity_to_response(entity))
 }
 
 async fn message_stream(
@@ -134,7 +229,7 @@ struct File {
 include!(concat!(env!("OUT_DIR"), "/page_data.rs"));
 
 impl IntoResponse for &'_ File {
-    fn into_response(self) -> Response {
+    fn into_response(self) -> axum::response::Response {
         Response::builder()
             .header("Content-Type", match self.name.rsplit('.').next().unwrap() {
                 "css" => "text/css",
@@ -145,4 +240,8 @@ impl IntoResponse for &'_ File {
             .body(body::boxed(body::Full::new(body::Bytes::from_static(self.data))))
             .unwrap()
     }
+}
+
+fn to_bytes(bytes: &[u8]) -> body::Full<body::Bytes> {
+    body::Full::new(body::Bytes::copy_from_slice(bytes))
 }

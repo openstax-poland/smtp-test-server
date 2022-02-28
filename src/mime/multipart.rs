@@ -1,3 +1,4 @@
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::{mail::syntax as mail, syntax::*, util::{SetOnce, self}};
@@ -9,7 +10,8 @@ pub struct Multipart {
     pub parts: Vec<Entity>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum MultipartKind {
     Mixed,
     Alternative,
@@ -52,6 +54,7 @@ pub fn parse(from: Unparsed) -> Result<Entity, super::Error> {
 
     Ok(Entity {
         data: EntityData::Multipart(Multipart { kind, parts }),
+        content_type: from.content_type.into(),
     })
 }
 

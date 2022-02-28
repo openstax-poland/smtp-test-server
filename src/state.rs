@@ -7,7 +7,7 @@ use thiserror::Error;
 use time::{OffsetDateTime, UtcOffset};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::{mail::{self, Mailbox, AddressOrGroup}, syntax::SyntaxError};
+use crate::{mail::{self, Mailbox, AddressOrGroup}, syntax::SyntaxError, mime};
 
 pub struct State {
     messages: RwLock<HashMap<String, Arc<Message>>>,
@@ -27,6 +27,7 @@ pub struct Message {
 
 pub enum MessageBody {
     Unknown(String),
+    Mime(mime::Entity),
 }
 
 impl State {
@@ -62,7 +63,7 @@ impl State {
             body: match message.body {
                 mail::Body::Unknown(body) =>
                     MessageBody::Unknown(String::from_utf8(body.to_vec())?),
-                mail::Body::Mime(_) => todo!(),
+                mail::Body::Mime(body) => MessageBody::Mime(body.parse()?),
             },
         };
 
@@ -94,12 +95,15 @@ pub enum SubmitMessageError {
     DuplicateMailId,
     #[error("Syntax error - invalid character - {0}")]
     Encoding(#[from] std::string::FromUtf8Error),
+    #[error("Syntax error - {0}")]
+    Mime(#[from] mime::Error),
 }
 
 impl SubmitMessageError {
     pub fn code(&self) -> u16 {
         match self {
-            SubmitMessageError::Syntax(_) | SubmitMessageError::Encoding(_) => 500,
+            SubmitMessageError::Syntax(_) | SubmitMessageError::Encoding(_)
+            | SubmitMessageError::Mime(_) => 500,
             SubmitMessageError::DuplicateMailId => 550,
         }
     }

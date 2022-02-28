@@ -15,4 +15,11 @@ div.mail-view {
             text-align: right;
         }
     }
+
+    > div.body {
+        iframe {
+            width: 100%;
+            border: none;
+        }
+    }
 }

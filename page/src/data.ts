@@ -14,6 +14,7 @@ export interface Message {
     to: (Mailbox | Group)[]
     /** Date and time when this message was sent, as a UNIX timestamp */
     date: number,
+    body: 'data' | 'mime-multipart',
 }
 
 export interface Group {
@@ -55,8 +56,36 @@ export async function loadMessages(): Promise<Message[]> {
     return await rsp.json()
 }
 
-/** Load body of a message */
-export async function loadBody(id: string): Promise<string> {
-    const rsp = await fetch(`/messages/${id}`)
-    return await rsp.text()
+export interface MessageData {
+    contentType: string
+    data: string | Multipart
+}
+
+export interface Multipart {
+    kind: 'mixed' | 'alternative'
+    parts: Part[]
+}
+
+export interface Part {
+    contentType: string
+}
+
+export async function loadMessage(id: string, part?: string): Promise<MessageData> {
+    const url = part == null
+        ? `/messages/${id}`
+        : `/messages/${id}/${part}`
+    const rsp = await fetch(url)
+
+    let data
+
+    if (rsp.headers.get('Content-Type')?.startsWith('application/json')) {
+        data = await rsp.json()
+    } else {
+        data = await rsp.text()
+    }
+
+    return {
+        contentType: rsp.headers.get('Content-Type') ?? 'application/octet-stream',
+        data,
+    }
 }
