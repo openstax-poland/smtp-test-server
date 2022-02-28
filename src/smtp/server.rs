@@ -9,7 +9,7 @@ use std::net::{Ipv6Addr, SocketAddr};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 
 use crate::{state::StateRef, util, config};
-use super::proto::{Connection, Response};
+use super::proto::Connection;
 
 pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
     // IPv6 TCP listener on port 587 (per RFC 6409)
@@ -58,8 +58,8 @@ async fn handle_client(state: StateRef, mut socket: TcpStream, addr: SocketAddr)
 async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Result<()> {
     loop {
         let response = match read_line(socket, smtp.buffer()).await? {
-            None => smtp.line().await,
-            Some(response) => Some(response),
+            false => smtp.line().await,
+            true => Some(smtp.overflow_response()),
         };
 
         if let Some(response) = response {
@@ -78,9 +78,9 @@ async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Resul
 
 /// Read single line into a line buffer
 ///
-/// Returns number of octets in current line, including terminating `\r\n`.
+/// Returns boolean indicating whether a buffer overflow has occurred.
 async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
--> Result<Option<Response<'static>>> {
+-> Result<bool> {
     let mut offset = 0;
 
     loop {
@@ -93,7 +93,7 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
                     offset += o;
 
                     if line[offset..].starts_with(b"\r\n") {
-                        return Ok(None);
+                        return Ok(false);
                     }
                 }
             }
@@ -105,8 +105,7 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
 
         if offset >= line.capacity() {
             log::trace!(">> {}", util::maybe_ascii(line));
-            log::trace!("offset {offset} > limit {}, returning 500", line.capacity());
-            return Ok(Some(Response::LINE_TOO_LONG));
+            return Ok(true);
         }
     }
 }

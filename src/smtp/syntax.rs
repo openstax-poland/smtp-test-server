@@ -119,7 +119,7 @@ pub fn path<'a>(buf: &mut Buffer<'a>) -> Result<MailboxRef<'a>> {
     })
 }
 
-pub fn parameter<'a>(buf: &mut Buffer<'a>) -> Result<(&'a [u8], &'a [u8])> {
+pub fn parameter<'a>(buf: &mut Buffer<'a>) -> Result<(&'a str, &'a str)> {
     // Mail-parameters = esmtp-param *(SP esmtp-param)
     // Rcpt-parameters = esmtp-param *(SP esmtp-param)
     // esmtp-param     = esmtp-keyword ["=" esmtp-value]
@@ -138,7 +138,7 @@ pub fn parameter<'a>(buf: &mut Buffer<'a>) -> Result<(&'a [u8], &'a [u8])> {
             return buf.error("expected a value");
         }
 
-        Ok((keyword, value))
+        Ok((str::from_utf8(keyword).unwrap(), str::from_utf8(value).unwrap()))
     })
 }
 

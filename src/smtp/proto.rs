@@ -110,6 +110,13 @@ impl Connection {
         })
     }
 
+    pub fn overflow_response(&self) -> Response<'_> {
+        match self.state {
+            State::Data => Response::TOO_MUCH_MAIL_DATA,
+            _ => Response::LINE_TOO_LONG,
+        }
+    }
+
     pub fn close(&mut self) -> Response {
         Response::new(&mut self.response, 221,
             format!("{} Service closing transmission channel", self.name)).close()
@@ -125,13 +132,19 @@ impl Connection {
                 format!("{} greets {}", self.name, hello.client));
 
         if hello.extended {
-            // TODO: list extensions
+            rsp.line(format!("SIZE {}", self.message.capacity()));
         }
 
         rsp.finish()
     }
 
     fn mail(&mut self, mail: Mail) -> Response {
+        if let Some(size) = mail.size {
+            if size >= self.message.capacity() {
+                return Response::MESSAGE_EXCEEDS_MAXIMUM_SIZE;
+            }
+        }
+
         self.reset_buffers();
         self.reverse_path = Some(mail.from.to_owned());
         self.state = State::Recipients;
@@ -246,13 +259,23 @@ impl<'a> Response<'a> {
         close_connection: false,
     };
 
-    pub const LINE_TOO_LONG: Response<'static> = Response {
+    const LINE_TOO_LONG: Response<'static> = Response {
         data: b"500 Line too long\r\n",
         close_connection: false,
     };
 
     const BAD_SEQUENCE_OF_COMMANDS: Response<'static> = Response {
         data: b"503 Bad sequence of commands\r\n",
+        close_connection: false,
+    };
+
+    const TOO_MUCH_MAIL_DATA: Response<'static> = Response {
+        data: b"552 Too much mail data\r\n",
+        close_connection: false,
+    };
+
+    const MESSAGE_EXCEEDS_MAXIMUM_SIZE: Response<'static> = Response {
+        data: b"552 Message size exceeds fixed maximium message size",
         close_connection: false,
     };
 
@@ -321,6 +344,7 @@ struct Hello<'a> {
 
 struct Mail<'a> {
     from: ReversePathRef<'a>,
+    size: Option<usize>,
 }
 
 struct Recipient<'a> {
@@ -401,9 +425,31 @@ impl<'a> Command<'a> {
         line.expect_caseless(b" FROM:")?;
         let from = syntax::reverse_path(line)?;
 
-        // TODO: extensions
+        let mut size = None;
 
-        Ok(Command::Mail(Mail { from }))
+        while line.expect(b" ").is_ok() {
+            let offset = line.offset();
+            let (extension, value) = syntax::parameter(line)?;
+
+            match_ignore_ascii_case! { extension;
+                "SIZE" => {
+                    if size.is_some() {
+                        return Err(SyntaxErrorKind::custom(
+                            format!("duplicate extension {extension}")).at(offset).into())
+                    }
+
+                    match value.parse::<usize>() {
+                        Ok(value) => size = Some(value),
+                        Err(err) => return Err(SyntaxErrorKind::custom(err.to_string())
+                            .at(offset).into()),
+                    }
+                }
+                _ => return Err(SyntaxErrorKind::custom(format!("unknown extension {extension}"))
+                    .at(offset).into()),
+            }
+        }
+
+        Ok(Command::Mail(Mail { from, size }))
     }
 
     fn parse_rcpt(line: &mut Buffer<'a>) -> Result<Self, CommandParseError> {
