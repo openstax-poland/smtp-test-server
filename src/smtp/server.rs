@@ -24,10 +24,11 @@ pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
             .await
             .context("could not accept connection")?;
 
+        let config = config.clone();
         let state = state.clone();
 
         tokio::spawn(async move {
-            if let Err(err) = handle_client(state, socket, addr).await {
+            if let Err(err) = handle_client(config, state, socket, addr).await {
                 log::error!("error serving {addr}: {err:?}");
             }
         });
@@ -35,8 +36,13 @@ pub async fn start(config: config::Smtp, state: StateRef) -> Result<()> {
 }
 
 /// Handle one SMTP connection
-async fn handle_client(state: StateRef, mut socket: TcpStream, addr: SocketAddr) -> Result<()> {
-    let mut smtp = Connection::new(state, socket.local_addr()?, addr);
+async fn handle_client(
+    config: config::Smtp,
+    state: StateRef,
+    mut socket: TcpStream,
+    addr: SocketAddr,
+) -> Result<()> {
+    let mut smtp = Connection::new(&config, state, socket.local_addr()?, addr);
 
     {
         let response = smtp.connect();
@@ -57,10 +63,8 @@ async fn handle_client(state: StateRef, mut socket: TcpStream, addr: SocketAddr)
 
 async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Result<()> {
     loop {
-        let response = match read_line(socket, smtp.buffer()).await? {
-            false => smtp.line().await,
-            true => Some(smtp.overflow_response()),
-        };
+        let overflow = read_line(socket, smtp.buffer()).await?;
+        let response = smtp.line(overflow).await;
 
         if let Some(response) = response {
             log::trace!("<< {}", util::maybe_ascii(response.data));
@@ -81,9 +85,10 @@ async fn handle_commands(smtp: &mut Connection, socket: &mut TcpStream) -> Resul
 /// Returns boolean indicating whether a buffer overflow has occurred.
 async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
 -> Result<bool> {
+    let mut overflow = false;
     let mut offset = 0;
 
-    loop {
+    'outer: loop {
         socket.read_buf(line).await?;
 
         while offset < line.len() {
@@ -93,7 +98,7 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
                     offset += o;
 
                     if line[offset..].starts_with(b"\r\n") {
-                        return Ok(false);
+                        break 'outer;
                     }
                 }
             }
@@ -104,8 +109,17 @@ async fn read_line(socket: &mut TcpStream, line: &mut Vec<u8>)
         }
 
         if offset >= line.capacity() {
-            log::trace!(">> {}", util::maybe_ascii(line));
-            return Ok(true);
+            overflow = true;
+            offset = 0;
+
+            if line.ends_with(b"\r") {
+                line.clear();
+                line.push(b'\r');
+            } else {
+                line.clear();
+            }
         }
     }
+
+    Ok(overflow)
 }

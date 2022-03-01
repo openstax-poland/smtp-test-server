@@ -7,25 +7,32 @@ use argh::FromArgs;
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Config {
     pub smtp: Smtp,
     pub http: Http,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
 pub struct Smtp {
     pub port: u16,
+    pub message_size: usize,
 }
 
 impl Default for Smtp {
     fn default() -> Self {
-        // RFC 6409 specifies 587 as the SMTP TCP port
-        Smtp { port: 587 }
+        Smtp {
+            // RFC 6409 specifies 587 as the SMTP TCP port
+            port: 587,
+            // RFC 5321 section 4.5.3.1.7 specified 64k octets as smallest
+            // allowed upper limit on message length.
+            message_size: 64 * 1024,
+        }
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Http {
     pub port: u16,
 }

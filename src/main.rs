@@ -25,6 +25,8 @@ async fn main() -> Result<()> {
         .init();
 
     let config = config::load()?;
+    log::trace!("config = {config:#?}");
+
     let state = state::State::new();
 
     let smtp = try_spawn(smtp::server::start(config.smtp, state.clone()));

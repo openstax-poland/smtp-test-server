@@ -47,7 +47,8 @@ enum State {
 }
 
 impl Connection {
-    pub fn new(global: StateRef, name: SocketAddr, remote: SocketAddr) -> Connection {
+    pub fn new(config: &crate::config::Smtp, global: StateRef, name: SocketAddr, remote: SocketAddr)
+    -> Connection {
         Connection {
             global,
             name,
@@ -58,9 +59,7 @@ impl Connection {
             // RFC 5321 section 4.5.3.1.6 specifies 1000 octets as smallest
             // allowed upper limit on length of a single line.
             line: Vec::with_capacity(1000),
-            // RFC 5321 section 4.5.3.1.7 specified 64k octets as smallest
-            // allowed upper limit on message length.
-            message: Vec::with_capacity(64 * 1024),
+            message: Vec::with_capacity(config.message_size),
             message_length: 0,
             response: vec![],
         }
@@ -78,7 +77,17 @@ impl Connection {
     }
 
     /// Handle single line
-    pub async fn line(&mut self) -> Option<Response<'_>> {
+    pub async fn line(&mut self, overflow: bool) -> Option<Response<'_>> {
+        if overflow {
+            return Some(match self.state {
+                State::Data => {
+                    self.state = State::Relaxed;
+                    Response::TOO_MUCH_MAIL_DATA
+                }
+                _ => Response::LINE_TOO_LONG,
+            });
+        }
+
         if self.state == State::Data {
             return self.data_line().await;
         }
@@ -108,13 +117,6 @@ impl Connection {
             Command::Noop => Response::OK_250,
             Command::Quit => self.close(),
         })
-    }
-
-    pub fn overflow_response(&self) -> Response<'_> {
-        match self.state {
-            State::Data => Response::TOO_MUCH_MAIL_DATA,
-            _ => Response::LINE_TOO_LONG,
-        }
     }
 
     pub fn close(&mut self) -> Response {
