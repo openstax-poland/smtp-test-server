@@ -6,7 +6,7 @@ use std::{str, borrow::Cow};
 use serde::Serialize;
 use time::{Weekday, Month, UtcOffset, Time, Date, OffsetDateTime, PrimitiveDateTime};
 
-use crate::{syntax::*, mime::syntax as mime};
+use crate::{syntax::*, mime::{syntax::{self as mime, encoded_word}, encoding::decode_word}};
 
 /// Folding white space
 fn fws(buf: &mut Buffer) -> Result<()> {
@@ -171,7 +171,7 @@ impl Phrase<'_> {
 
         while !rest.is_empty() {
             let word = word(&mut rest).expect("invalid pre-parsed string");
-            result.push_str(&word.unquote());
+            result.push_str(&decode_word(&word.unquote()));
         }
 
         result
@@ -206,23 +206,32 @@ fn phrase<'a>(buf: &mut Buffer<'a>) -> Result<Phrase<'a>> {
 pub struct Folded<'a>(&'a str);
 
 impl<'a> Folded<'a> {
-    pub fn unfold(&self) -> Cow<'a, str> {
+    pub fn unfold(&self) -> String {
         let mut result = String::new();
-        let mut rest = self.0;
+        let mut buf = Buffer::new(self.0.as_bytes());
 
-        while let Some(inx) = rest.find('\r') {
-            if inx > 0 {
-                result.push_str(&rest[..inx]);
+        while !buf.is_empty() {
+            buf.maybe(|buf| {
+                let word = encoded_word(buf)?
+                    .decode()
+                    .map_err(|_| SyntaxErrorKind::custom("").at(buf.offset()))?;
+                result.push_str(&word);
+                Ok(())
+            });
+
+            let fragment = buf.take_while(|b, _| is_wsp(b));
+            if !fragment.is_empty() {
+                result.push_str(str::from_utf8(fragment).unwrap());
+                continue;
             }
 
-            rest = &rest[2..];
+            let fragment = buf.take_while(|b, _| is_vchar(b) && b != b' ');
+            result.push_str(str::from_utf8(fragment).unwrap());
+
+            buf.maybe(fws);
         }
 
-        if result.is_empty() {
-            Cow::from(self.0)
-        } else {
-            Cow::from(result)
-        }
+        result
     }
 }
 

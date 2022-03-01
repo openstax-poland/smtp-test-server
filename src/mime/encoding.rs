@@ -5,9 +5,9 @@
 use std::{error::Error, fmt, borrow::Cow};
 use thiserror::Error;
 
-use crate::util;
+use crate::{util, syntax::Buffer};
 
-use super::syntax::TransferEncoding;
+use super::syntax::{TransferEncoding, encoded_word};
 
 impl TransferEncoding {
     pub fn decode(self, data: &[u8]) -> Result<Cow<[u8]>, DecodeError> {
@@ -171,6 +171,26 @@ pub enum Charset {
 pub struct CharsetError;
 
 impl Charset {
+    pub fn by_name(name: &str) -> Option<Charset> {
+        Some(match_ignore_ascii_case! { name;
+            "US-ASCII" => Charset::UsAscii,
+            "ISO-8859-2" => Charset::Iso8859_2,
+            "ISO-8859-3" => Charset::Iso8859_3,
+            "ISO-8859-4" => Charset::Iso8859_4,
+            "ISO-8859-5" => Charset::Iso8859_5,
+            "ISO-8859-6" => Charset::Iso8859_6,
+            "ISO-8859-7" => Charset::Iso8859_7,
+            "ISO-8859-8" => Charset::Iso8859_8,
+            "ISO-8859-10" => Charset::Iso8859_10,
+            "ISO-8859-13" => Charset::Iso8859_13,
+            "ISO-8859-14" => Charset::Iso8859_14,
+            "ISO-8859-15" => Charset::Iso8859_15,
+            "ISO-8859-16" => Charset::Iso8859_16,
+            "UTF-8" => Charset::Utf8,
+            _ => return None,
+        })
+    }
+
     pub fn decode(self, data: &[u8]) -> Result<Cow<str>, CharsetError> {
         use encoding_rs::*;
 
@@ -199,6 +219,17 @@ impl Charset {
         };
 
         charset.decode_without_bom_handling_and_without_replacement(data).ok_or(CharsetError)
+    }
+}
+
+pub fn decode_word(word: &str) -> Cow<str> {
+    let mut buf = Buffer::new(word.as_bytes());
+    match encoded_word(&mut buf) {
+        Ok(encoded) => match encoded.decode() {
+            Ok(word) => Cow::from(word),
+            Err(_) => Cow::from(word),
+        }
+        Err(_) => Cow::from(word),
     }
 }
 

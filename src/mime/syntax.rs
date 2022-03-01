@@ -4,7 +4,8 @@
 
 use std::str;
 
-use crate::{syntax::*, mail::syntax as mail};
+use crate::{syntax::*, mail::syntax as mail, mime::encoding::Charset};
+use super::encoding::CharsetError;
 
 // -------------- RFC 2045: MIME Part One: Format of Internet Message Bodies ---
 
@@ -198,4 +199,87 @@ pub fn header<'a>(name: &str, buf: &mut Buffer<'a>) -> Result<Option<Header<'a>>
     } else {
         return Ok(None);
     }))
+}
+
+// --- RFC 2047: MIME Part Three: Message Header Extensions for Non-ASCII Text -
+
+#[derive(Clone, Copy, Debug)]
+pub struct EncodedWord<'a> {
+    pub charset: &'a str,
+    pub encoding: WordEncoding,
+    pub encoded_text: &'a [u8],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WordEncoding {
+    Base64,
+    Quoted,
+}
+
+impl<'a> EncodedWord<'a> {
+    pub fn decode(self) -> Result<String, CharsetError> {
+        let charset = Charset::by_name(self.charset).ok_or(CharsetError)?;
+
+        let data = match self.encoding {
+            WordEncoding::Base64 => base64::decode(self.encoded_text).map_err(|_| CharsetError)?,
+            WordEncoding::Quoted => {
+                let mut result = Vec::with_capacity(self.encoded_text.len());
+                let mut rest = self.encoded_text;
+
+                while let Some(inx) = rest.iter().position(|b| matches!(b, b'=' | b'_')) {
+                    result.extend_from_slice(&rest[..inx]);
+
+                    match rest[inx] {
+                        b'_' => {
+                            result.push(32);
+                            rest = &rest[inx + 1..];
+                        }
+                        b'=' if rest.len() > inx + 3 => {
+                            let byte = std::str::from_utf8(&rest[inx + 1..inx + 3])
+                                .map_err(|_| CharsetError)?;
+                            let byte = u8::from_str_radix(byte, 16)
+                                .map_err(|_| CharsetError)?;
+                            result.push(byte);
+                            rest = &rest[inx + 3..];
+                        }
+                        _ => return Err(CharsetError),
+                    }
+                }
+
+                result.extend_from_slice(rest);
+
+                result
+            }
+        };
+
+        charset.decode(&data).map(|d| d.into_owned())
+    }
+}
+
+pub fn encoded_word<'a>(buf: &mut Buffer<'a>) -> Result<EncodedWord<'a>> {
+    buf.atomic(|buf| {
+        let start = buf.offset();
+
+        buf.expect(b"=?")?;
+        let charset = token(buf)?;
+        buf.expect(b"?")?;
+
+        let encoding = token(buf)?;
+        let encoding = match_ignore_ascii_case! { encoding;
+            "B" => WordEncoding::Base64,
+            "Q" => WordEncoding::Quoted,
+            _ => return buf.error(format!("unknown encoding {encoding:?}")),
+        };
+
+        buf.expect(b"?")?;
+        let encoded_text = buf.take_while(|b, _| b.is_ascii_graphic() && b != b' ' && b != b'?');
+        buf.expect(b"?=")?;
+
+        let len = buf.offset() - start;
+        if len > 76 {
+            buf.error("too long encoded-word")
+        } else {
+            Ok(EncodedWord { charset, encoding, encoded_text })
+        }
+    })
 }

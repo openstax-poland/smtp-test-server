@@ -6,9 +6,9 @@ use axum::http::HeaderValue;
 use std::{fmt, borrow::Cow};
 use thiserror::Error;
 
-mod encoding;
 mod multipart;
 
+pub mod encoding;
 pub mod syntax;
 
 use crate::{mime::encoding::Charset, util};
@@ -67,22 +67,9 @@ impl<'a> Unparsed<'a> {
                 for param in self.content_type.parameters() {
                     #[allow(clippy::single_match)]
                     match param.attribute {
-                        "charset" => charset = match_ignore_ascii_case! { param.value.unquote();
-                            "US-ASCII" => Charset::UsAscii,
-                            "ISO-8859-2" => Charset::Iso8859_2,
-                            "ISO-8859-3" => Charset::Iso8859_3,
-                            "ISO-8859-4" => Charset::Iso8859_4,
-                            "ISO-8859-5" => Charset::Iso8859_5,
-                            "ISO-8859-6" => Charset::Iso8859_6,
-                            "ISO-8859-7" => Charset::Iso8859_7,
-                            "ISO-8859-8" => Charset::Iso8859_8,
-                            "ISO-8859-10" => Charset::Iso8859_10,
-                            "ISO-8859-13" => Charset::Iso8859_13,
-                            "ISO-8859-14" => Charset::Iso8859_14,
-                            "ISO-8859-15" => Charset::Iso8859_15,
-                            "ISO-8859-16" => Charset::Iso8859_16,
-                            "UTF-8" => Charset::Utf8,
-                            _ => return Ok(Entity {
+                        "charset" => charset = match Charset::by_name(&param.value.unquote()) {
+                            Some(charset) => charset,
+                            None => return Ok(Entity {
                                 data: EntityData::Binary(data.into_owned()),
                                 content_type: ContentType::APPLICATION_OCTET_STREAM,
                             }),
