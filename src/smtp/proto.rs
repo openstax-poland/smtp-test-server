@@ -183,6 +183,10 @@ impl Connection {
     }
 
     fn data(&mut self) -> Response {
+        if self.state != State::Recipients || self.forward_path.is_empty() {
+            return Response::BAD_SEQUENCE_OF_COMMANDS;
+        }
+
         self.state = State::Data;
         Response::START_MAIL_INPUT
     }
