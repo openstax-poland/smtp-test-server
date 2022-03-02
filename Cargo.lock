@@ -671,6 +671,7 @@ dependencies = [
  "encoding_rs",
  "env_logger",
  "log",
+ "memchr",
  "serde",
  "serde_json",
  "thiserror",

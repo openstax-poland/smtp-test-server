@@ -5,6 +5,8 @@
 //! Implementation of [RFC 5322](
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 
+use memchr::memmem;
+
 use crate::{syntax::*, mime, util::SetOnce};
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
@@ -159,12 +161,10 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
 
 /// Separate message into its header and body sections
 fn separate_message(message: &[u8]) -> (&[u8], &[u8]) {
-    for (cr, _) in message.iter().enumerate().filter(|&(_, &c)| c == b'\r') {
-        if message[cr..].starts_with(b"\r\n\r\n") {
-            return (&message[..cr + 2], &message[cr + 4..]);
-        }
+    match memmem::find(message, b"\r\n\r\n") {
+        Some(cr) => (&message[..cr + 2], &message[cr + 4..]),
+        None => (message, b""),
     }
-    (message, b"")
 }
 
 fn parse_trace<'a>(header: &mut Buffer<'a>) -> Result<Option<Trace<'a>>> {

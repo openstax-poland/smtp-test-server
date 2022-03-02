@@ -1,3 +1,8 @@
+// Copyright 2022 OpenStax Poland
+// Licensed under the MIT license. See LICENSE file in the project root for
+// full license text.
+
+use memchr::memmem;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -60,17 +65,20 @@ pub fn parse(from: Unparsed) -> Result<Entity, super::Error> {
 
 fn split<'a: 'b, 'b>(data: &'a [u8], boundary: &'b [u8])
 -> Result<impl Iterator<Item = Result<&'a [u8], Error>> + 'b, Error> {
-    let mut boundaries = (0..data.len())
-        .filter_map(|start| {
-            if data[start..].starts_with(b"\r\n--")  && data[start + 4..].starts_with(boundary) {
-                Some((start, start + 4 + boundary.len()))
-            } else {
-                None
-            }
-        });
+    let except_last_line = match data.strip_suffix(b"\r\n") {
+        Some(except_last_line) => except_last_line,
+        None => return Err(Error::Unterminated),
+    };
 
-    let (mut start, mut start2) = if data.starts_with(b"--") && data[2..].starts_with(boundary) {
-        (0, 2 + boundary.len())
+    let mut boundaries = memmem::find_iter(except_last_line, b"\r\n")
+        .filter(|&start| start + 4 < data.len())
+        .map(|start| start + 2)
+        .enumerate()
+        .filter(|&(_, start)|
+            data[start..].starts_with(b"--") && data[start + 2..].starts_with(boundary));
+
+    let (mut line, mut start) = if data.starts_with(b"--") && data[2..].starts_with(boundary) {
+        (1, 0)
     } else {
         boundaries.next().ok_or(Error::NoParts)?
     };
@@ -87,15 +95,17 @@ fn split<'a: 'b, 'b>(data: &'a [u8], boundary: &'b [u8])
             None => return Some(Err(Error::Unterminated)),
         };
 
-        let data_start = match (start2..data.len()).find(|&off| data[off..].starts_with(b"\r\n")) {
-            Some(data_start) => data_start + 2,
-            None => return Some(Err(Error::Unterminated)),
+        let data_start = match memmem::find(&data[start..], b"\r\n") {
+            Some(data_start) => start + data_start + 2,
+            None => return Some(Err(ParseError::Unterminated)),
         };
 
-        (start, start2) = next;
-        finished = data[start2..].starts_with(b"--");
+        let start_line = line;
 
-        Some(Ok(&data[data_start..start]))
+        (line, start) = next;
+        finished = data[start + 2 + boundary.len()..].starts_with(b"--\r\n");
+
+        Some(Ok((start_line, &data[data_start..start])))
     }))
 }
 
@@ -145,10 +155,8 @@ fn parse_part<'a>(from: &Unparsed, part: &'a [u8], has_transfer_encoding: bool)
 
 /// Separate entity into its header and body sections
 fn separate_entity(entity: &[u8]) -> (&[u8], &[u8]) {
-    for (cr, _) in entity.iter().enumerate().filter(|&(_, &c)| c == b'\r') {
-        if entity[cr..].starts_with(b"\r\n\r\n") {
-            return (&entity[..cr + 2], &entity[cr + 4..]);
-        }
+    match memmem::find(entity, b"\r\n\r\n") {
+        Some(cr) => (&entity[..cr + 2], &entity[cr + 4..]),
+        None => (entity, b""),
     }
-    (entity, b"")
 }
