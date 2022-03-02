@@ -70,22 +70,24 @@ export interface Part {
     contentType: string
 }
 
-export async function loadMessage(id: string, part?: string): Promise<MessageData> {
-    const url = part == null
+export function messageUrl(id: string, part?: string): string {
+    return part == null
         ? `/messages/${id}`
         : `/messages/${id}/${part}`
-    const rsp = await fetch(url)
+}
 
-    let data
+export async function loadMessage(id: string, part?: string): Promise<MessageData> {
+    const rsp = await fetch(messageUrl(id, part))
 
-    if (rsp.headers.get('Content-Type')?.startsWith('application/json')) {
-        data = await rsp.json()
-    } else {
-        data = await rsp.text()
-    }
+    const contentType = rsp.headers.get('Content-Type')
+        ?.split(';', 1)
+        ?.[0]
+        ?.toLowerCase()
+        ?? 'application/octet-stream'
 
-    return {
-        contentType: rsp.headers.get('Content-Type') ?? 'application/octet-stream',
-        data,
-    }
+    const data = contentType === 'application/json'
+        ? await rsp.json()
+        : await rsp.text()
+
+    return { contentType, data }
 }

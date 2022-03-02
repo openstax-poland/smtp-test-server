@@ -8,7 +8,7 @@ import Tabs from '~/src/components/Tabs'
 
 import { Message, Multipart } from '~/src/data'
 
-import MessageBody from './MessageBody'
+import MultipartPart from './MultipartPart'
 
 export interface Props {
     message: Message
@@ -31,9 +31,10 @@ export default function MultipartAlternative({ message, part, data }: Props) {
         return { title, data: part }
     }), [data.parts])
 
-    const render = React.useCallback((index, data) => <MessageBody
+    const render = React.useCallback((index, data) => <MultipartPart
         message={message}
         part={`${part ?? ''}/${index}`}
+        contentType={data.contentType}
         />,
         [message, part]
     )

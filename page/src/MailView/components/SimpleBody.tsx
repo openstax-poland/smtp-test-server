@@ -29,14 +29,18 @@ interface FrameProps {
 function Frame({ src }: FrameProps) {
     const ref = React.useRef<HTMLIFrameElement | null>(null)
 
-    React.useLayoutEffect(() => resizeFrame(ref.current!))
+    const resize = React.useCallback(() => resizeFrame(ref.current!), [ref])
 
-    const onLoad = React.useCallback(() => resizeFrame(ref.current!), [ref])
+    React.useEffect(() => {
+        const observer = new ResizeObserver(resize)
+        observer.observe(ref.current!)
+        return () => observer.disconnect()
+    }, [ref, resize])
 
-    return <iframe ref={ref} src={src} onLoad={onLoad} />
+    return <iframe ref={ref} src={src} sandbox="allow-same-origin" onLoad={resize} />
 }
 
 function resizeFrame(frame: HTMLIFrameElement) {
-    frame.width = frame.contentDocument!.body.scrollWidth as any
-    frame.height = frame.contentDocument!.body.scrollHeight as any
+    frame.width = frame.contentDocument!.body.parentElement!.scrollWidth as any
+    frame.height = frame.contentDocument!.body.parentElement!.scrollHeight as any
 }
