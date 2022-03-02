@@ -169,7 +169,7 @@ impl Connection {
 
         if self.message.ends_with(b"\r\n.\r\n") {
             self.state = State::Relaxed;
-            self.message_length = self.message.len() - 5;
+            self.message_length = self.message.len() - 3;
             return Some(self.submit_message().await);
         }
 
