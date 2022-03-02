@@ -20,6 +20,7 @@ use crate::{
     mail::{Mailbox, AddressOrGroup},
     mime::{EntityData, ContentType, Entity, MultipartKind},
     state::{StateRef, Message, MessageBody},
+    syntax::Located,
     util,
 };
 
@@ -52,6 +53,7 @@ struct MessageData {
     subject: Option<String>,
     to: Vec<AddressOrGroup>,
     body: BodyType,
+    errors: Vec<Located<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,7 +64,7 @@ enum BodyType {
 }
 
 impl From<&'_ Message> for MessageData {
-    fn from(Message { id, date, from, subject, to, body, .. }: &'_ Message) -> Self {
+    fn from(Message { id, date, from, subject, to, body, errors, .. }: &'_ Message) -> Self {
         MessageData {
             id: id.clone(),
             date: *date,
@@ -76,6 +78,7 @@ impl From<&'_ Message> for MessageData {
                     _ => BodyType::Data,
                 },
             },
+            errors: errors.clone(),
         }
     }
 }

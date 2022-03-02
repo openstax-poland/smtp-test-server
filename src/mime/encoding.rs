@@ -108,11 +108,15 @@ mod quoted_printable {
 #[derive(Debug)]
 pub struct DecodeError(DecodeErrorKind);
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum DecodeErrorKind {
-    Base64(base64::DecodeError),
+    #[error("base64 - {0}")]
+    Base64(#[from] base64::DecodeError),
+    #[error("line too long")]
     LineOverflow,
+    #[error("invalid escape sequence")]
     InvalidEscapeSequence,
+    #[error("illegal character")]
     IllegalCharacter,
 }
 
@@ -130,12 +134,7 @@ impl From<base64::DecodeError> for DecodeError {
 
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.0 {
-            DecodeErrorKind::Base64(ref error) => error.fmt(f),
-            DecodeErrorKind::LineOverflow => f.write_str("line too long"),
-            DecodeErrorKind::InvalidEscapeSequence => f.write_str("invalid escape sequence"),
-            DecodeErrorKind::IllegalCharacter => f.write_str("illegal character"),
-        }
+        self.0.fmt(f)
     }
 }
 

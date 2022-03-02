@@ -355,17 +355,11 @@ struct Recipient<'a> {
 
 #[derive(Debug, Error)]
 enum CommandParseError {
-    #[error(transparent)]
-    Syntax(SyntaxError),
+    #[error("Syntax error - {0}")]
+    Syntax(#[from] Located<SyntaxError>),
     /// Unknown command
     #[error("Command not recognized")]
     Unknown,
-}
-
-impl From<SyntaxError> for CommandParseError {
-    fn from(err: SyntaxError) -> Self {
-        CommandParseError::Syntax(err)
-    }
 }
 
 impl<'a> Command<'a> {
@@ -430,24 +424,24 @@ impl<'a> Command<'a> {
         let mut size = None;
 
         while line.expect(b" ").is_ok() {
-            let offset = line.offset();
+            let location = line.location();
             let (extension, value) = syntax::parameter(line)?;
 
             match_ignore_ascii_case! { extension;
                 "SIZE" => {
                     if size.is_some() {
-                        return Err(SyntaxErrorKind::custom(
-                            format!("duplicate extension {extension}")).at(offset).into())
+                        return Err(Located::new(
+                            location, format!("duplicate extension {extension}")).into())
                     }
 
                     match value.parse::<usize>() {
                         Ok(value) => size = Some(value),
-                        Err(err) => return Err(SyntaxErrorKind::custom(err.to_string())
-                            .at(offset).into()),
+                        Err(err) => return Err(Located::new(
+                            location, err.to_string()).into()),
                     }
                 }
-                _ => return Err(SyntaxErrorKind::custom(format!("unknown extension {extension}"))
-                    .at(offset).into()),
+                _ => return Err(Located::new(
+                    location, format!("unknown extension {extension}")).into()),
             }
         }
 

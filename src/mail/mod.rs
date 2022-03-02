@@ -6,8 +6,9 @@
 //! https://datatracker.ietf.org/doc/html/rfc5322): Internet Message Format
 
 use memchr::memmem;
+use thiserror::Error;
 
-use crate::{syntax::*, mime, util::SetOnce};
+use crate::{syntax::*, mime, util::SetOnce, state::Errors};
 use self::syntax::{Header, MailboxList, MailboxRef, PathRef, Received, AnyDateTime, AddressOrGroupList};
 
 pub use self::syntax::{Address, AddressOrGroup, Mailbox};
@@ -49,7 +50,15 @@ pub enum Body<'a> {
     Mime(mime::Unparsed<'a>),
 }
 
-pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
+#[derive(Debug, Error)]
+#[error("syntax error in header field {field} - {error}")]
+pub struct ParseFieldError<'a, E> {
+    pub field: &'a str,
+    #[source]
+    pub error: E,
+}
+
+pub fn parse<'a>(message: &'a [u8], errors: &mut Errors) -> Result<ParsedMessage<'a>> {
     let (header, body) = separate_message(message);
     let mut header = Buffer::new(header);
 
@@ -78,30 +87,40 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
     let mut content_description = None;
 
     while !header.is_empty() {
-        let offset = header.offset();
-        match syntax::field(&mut header)? {
+        let location = header.location();
+
+        let field = match syntax::field(&mut header) {
+            Ok(field) => field,
+            Err(error) => {
+                let (field, _) = syntax::optional_field(&mut header)?;
+                errors.add(error.map(|error| ParseFieldError { field, error }));
+                continue;
+            }
+        };
+
+        match field {
             Header::OriginationDate(value) =>
-                origination_date.set_once(offset, "Origination-Date", value)?,
+                origination_date.set_once(location, "Origination-Date", value)?,
             Header::From(value) =>
-                from.set_once(offset, "From", value)?,
+                from.set_once(location, "From", value)?,
             Header::Sender(value) =>
-                sender.set_once(offset, "Sender", value)?,
+                sender.set_once(location, "Sender", value)?,
             Header::ReplyTo(value) =>
-                reply_to.set_once(offset, "Reply-To", value)?,
+                reply_to.set_once(location, "Reply-To", value)?,
             Header::To(value) =>
-                to.set_once(offset, "To", value)?,
+                to.set_once(location, "To", value)?,
             Header::CarbonCopy(value) =>
-                cc.set_once(offset, "Carbon-Copy", value)?,
+                cc.set_once(location, "Carbon-Copy", value)?,
             Header::BlindCarbonCopy(value) =>
-                bcc.set_once(offset, "Blind-Carbon-Copy", value)?,
+                bcc.set_once(location, "Blind-Carbon-Copy", value)?,
             Header::MessageId(value) =>
-                id.set_once(offset, "Message-ID", value.0.into())?,
+                id.set_once(location, "Message-ID", value.0.into())?,
             Header::InReplyTo(value) =>
-                in_reply_to.set_once(offset, "InReply-To", value)?,
+                in_reply_to.set_once(location, "InReply-To", value)?,
             Header::References(value) =>
-                references.set_once(offset, "References", value)?,
+                references.set_once(location, "References", value)?,
             Header::Subject(value) =>
-                subject.set_once(offset, "Subject", value.unfold().into())?,
+                subject.set_once(location, "Subject", value.unfold())?,
             Header::Comments(value) => comments.push(value.unfold()),
             Header::Keywords(value) =>
                 keywords.extend(value.iter().map(|keyword| keyword.unquote())),
@@ -116,15 +135,15 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
             Header::Received(_) => todo!(),
             Header::Mime(header) => match header {
                 mime::Header::Version(value) =>
-                    mime_version.set_once(offset, "MIME-Version", value)?,
+                    mime_version.set_once(location, "MIME-Version", value)?,
                 mime::Header::ContentType(value) =>
-                    content_type.set_once(offset, "Content-Type", value)?,
+                    content_type.set_once(location, "Content-Type", value)?,
                 mime::Header::ContentTransferEncoding(value) =>
-                    transfer_encoding.set_once(offset, "Content-Transfer-Encoding", value)?,
+                    transfer_encoding.set_once(location, "Content-Transfer-Encoding", value)?,
                 mime::Header::ContentId(value) =>
-                    content_id.set_once(offset, "Content-ID", value)?,
+                    content_id.set_once(location, "Content-ID", value)?,
                 mime::Header::ContentDescription(value) =>
-                    content_description.set_once(offset, "Content-Description", value)?,
+                    content_description.set_once(location, "Content-Description", value)?,
             },
             Header::Optional { name, body } => {
                 log::trace!("unrecognized header {name}: {body:?}");
@@ -133,12 +152,12 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
     }
 
     let origination_date = origination_date
-        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Origination-Date").at(0))?;
+        .ok_or_else(|| Located::new(Location::ZERO, "missing required header Origination-Date"))?;
     let from = from
-        .ok_or_else(|| SyntaxErrorKind::custom("missing required header From").at(0))?;
+        .ok_or_else(|| Located::new(Location::ZERO, "missing required header From"))?;
 
     let body = match mime_version {
-        None => Body::Unknown(body),
+        None => Body::Unknown(body.item),
         Some(version) => Body::Mime(mime::Unparsed {
             data: body,
             version,
@@ -160,11 +179,18 @@ pub fn parse(message: &[u8]) -> Result<ParsedMessage> {
 }
 
 /// Separate message into its header and body sections
-fn separate_message(message: &[u8]) -> (&[u8], &[u8]) {
-    match memmem::find(message, b"\r\n\r\n") {
-        Some(cr) => (&message[..cr + 2], &message[cr + 4..]),
-        None => (message, b""),
-    }
+pub fn separate_message(message: &[u8]) -> (&[u8], Located<&[u8]>) {
+    let (header_end, body_start) = match memmem::find(message, b"\r\n\r\n") {
+        Some(cr) => (cr + 2, cr + 4),
+        None => (message.len(), message.len()),
+    };
+
+    let header = &message[..header_end];
+    let body = &message[body_start..];
+    let line = memmem::find_iter(&message[..body_start], b"\r\n").count() + 1;
+    let location = Location { offset: header.len(), line, column: 1 };
+
+    (header, Located::new(location, body))
 }
 
 fn parse_trace<'a>(header: &mut Buffer<'a>) -> Result<Option<Trace<'a>>> {
@@ -192,7 +218,7 @@ fn parse_trace<'a>(header: &mut Buffer<'a>) -> Result<Option<Trace<'a>>> {
 }
 
 fn parse_resent_block<'a>(header: &mut Buffer<'a>) -> Result<Option<ResentInfo<'a>>> {
-    let offset = header.offset();
+    let location = header.location();
 
     let mut date = None;
     let mut from = None;
@@ -260,9 +286,9 @@ fn parse_resent_block<'a>(header: &mut Buffer<'a>) -> Result<Option<ResentInfo<'
     }
 
     let date = date
-        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Resent-Date").at(offset))?;
+        .ok_or_else(|| Located::new(location, "missing required header Resent-Date"))?;
     let from = from
-        .ok_or_else(|| SyntaxErrorKind::custom("missing required header Resent-From").at(offset))?;
+        .ok_or_else(|| Located::new(location, "missing required header Resent-From"))?;
 
     Ok(Some(ResentInfo {
         date,

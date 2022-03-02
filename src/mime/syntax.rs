@@ -20,7 +20,7 @@ pub fn version(buf: &mut Buffer) -> Result<MimeVersion> {
     // Note that despite comments and spaces not being present in grammar,
     // examples in the same section include them.
     buf.atomic(|buf| {
-        let offset = buf.offset();
+        let location = buf.location();
         buf.maybe(mail::cfws);
         let major = read_number(buf, 10, 1, 1)?;
         buf.maybe(mail::comment);
@@ -31,8 +31,7 @@ pub fn version(buf: &mut Buffer) -> Result<MimeVersion> {
 
         match (major, minor) {
             (1, 0) => Ok(MimeVersion::Mime10),
-            _ => Err(SyntaxErrorKind::custom(
-                format!("unsupported MIME version {major}.{minor}")).at(offset)),
+            _ => Err(Located::new(location, format!("unsupported MIME version {major}.{minor}"))),
         }
     })
 }
@@ -156,7 +155,7 @@ pub fn content_transfer_encoding(buf: &mut Buffer) -> Result<TransferEncoding> {
     buf.atomic(|buf| {
         buf.maybe(mail::cfws);
 
-        let offset = buf.offset();
+        let location = buf.location();
         let mechanism = token(buf)?;
 
         if mechanism.eq_ignore_ascii_case("7bit") {
@@ -170,8 +169,7 @@ pub fn content_transfer_encoding(buf: &mut Buffer) -> Result<TransferEncoding> {
         } else if mechanism.eq_ignore_ascii_case("base64") {
             Ok(TransferEncoding::Base64)
         } else {
-            Err(SyntaxErrorKind::custom(
-                format!("unsupported transfer encoding {mechanism}")).at(offset))
+            Err(Located::new(location, format!("unsupported transfer encoding {mechanism}")))
         }
     })
 }
@@ -258,7 +256,7 @@ impl<'a> EncodedWord<'a> {
 
 pub fn encoded_word<'a>(buf: &mut Buffer<'a>) -> Result<EncodedWord<'a>> {
     buf.atomic(|buf| {
-        let start = buf.offset();
+        let start = buf.location();
 
         buf.expect(b"=?")?;
         let charset = token(buf)?;
@@ -275,7 +273,7 @@ pub fn encoded_word<'a>(buf: &mut Buffer<'a>) -> Result<EncodedWord<'a>> {
         let encoded_text = buf.take_while(|b, _| b.is_ascii_graphic() && b != b' ' && b != b'?');
         buf.expect(b"?=")?;
 
-        let len = buf.offset() - start;
+        let len = buf.location().offset - start.offset;
         if len > 76 {
             buf.error("too long encoded-word")
         } else {

@@ -7,7 +7,7 @@ use thiserror::Error;
 use time::{OffsetDateTime, UtcOffset};
 use tokio::sync::{RwLock, broadcast};
 
-use crate::{mail::{self, Mailbox, AddressOrGroup}, syntax::SyntaxError, mime};
+use crate::{mail::{self, Mailbox, AddressOrGroup}, syntax::{SyntaxError, Located, Location}, mime};
 
 pub struct State {
     messages: RwLock<HashMap<String, Arc<Message>>>,
@@ -23,6 +23,7 @@ pub struct Message {
     pub subject: Option<String>,
     pub to: Vec<AddressOrGroup>,
     pub body: MessageBody,
+    pub errors: Vec<Located<String>>,
 }
 
 pub enum MessageBody {
@@ -51,7 +52,16 @@ impl State {
     }
 
     pub async fn submit_message(&self, message: &[u8]) -> Result<(), SubmitMessageError> {
-        let message = mail::parse(message)?;
+        let mut errors = Vec::new();
+        let mut collector = Errors::new(&mut errors);
+
+        let message = mail::parse(message, &mut collector)?;
+
+        let body = match message.body {
+            mail::Body::Unknown(body) =>
+                MessageBody::Unknown(String::from_utf8(body.to_vec())?),
+            mail::Body::Mime(body) => MessageBody::Mime(body.parse(&mut collector)?),
+        };
 
         let message = Message {
             id: message.id.unwrap_or_else(
@@ -60,11 +70,8 @@ impl State {
             from: message.from.iter().map(|x| x.to_owned()).collect(),
             subject: message.subject,
             to: message.to.iter().map(|x| x.to_owned()).collect(),
-            body: match message.body {
-                mail::Body::Unknown(body) =>
-                    MessageBody::Unknown(String::from_utf8(body.to_vec())?),
-                mail::Body::Mime(body) => MessageBody::Mime(body.parse()?),
-            },
+            body,
+            errors,
         };
 
         self.add_message(message).await
@@ -90,7 +97,7 @@ impl State {
 #[derive(Debug, Error)]
 pub enum SubmitMessageError {
     #[error(transparent)]
-    Syntax(#[from] SyntaxError),
+    Syntax(#[from] Located<SyntaxError>),
     #[error("Attempted to re-use existing mail ID")]
     DuplicateMailId,
     #[error("Syntax error - invalid character - {0}")]
@@ -105,6 +112,45 @@ impl SubmitMessageError {
             SubmitMessageError::Syntax(_) | SubmitMessageError::Encoding(_)
             | SubmitMessageError::Mime(_) => 500,
             SubmitMessageError::DuplicateMailId => 550,
+        }
+    }
+}
+
+pub struct Errors<'a> {
+    offset_offset: usize,
+    line_offset: usize,
+    errors: &'a mut Vec<Located<String>>,
+}
+
+impl<'a> Errors<'a> {
+    pub fn new(errors: &'a mut Vec<Located<String>>) -> Self {
+        Errors {
+            offset_offset: 0,
+            line_offset: 0,
+            errors,
+        }
+    }
+
+    pub fn add(&mut self, Located { at, item: error }: Located<impl ToString>) {
+        self.add_at(at, error)
+    }
+
+    pub fn add_at(&mut self, at: Location, error: impl ToString) {
+        let at = Location {
+            offset: at.offset + self.offset_offset,
+            line: at.line + self.line_offset,
+            column: at.column,
+        };
+        self.errors.push(Located::new(at, error.to_string()));
+    }
+
+    pub fn nested(&mut self, at: Location) -> Errors {
+        assert!(at.column == 1);
+
+        Errors {
+            offset_offset: self.offset_offset + at.offset,
+            line_offset: self.line_offset + at.line - 1,
+            errors: self.errors,
         }
     }
 }

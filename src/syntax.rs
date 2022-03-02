@@ -5,22 +5,34 @@
 //! Utilities for parsing
 
 use std::{str, ops, borrow::Cow, marker::PhantomData, fmt};
+use memchr::memmem;
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::util;
-use self::SyntaxErrorKind::*;
+use self::SyntaxError::*;
 
-pub type Result<T, E = SyntaxError> = std::result::Result<T, E>;
+pub type Result<T, E = Located<SyntaxError>> = std::result::Result<T, E>;
 
-#[derive(Debug, Error)]
-#[error("Syntax error - at byte {byte} - {kind}")]
-pub struct SyntaxError {
-    byte: usize,
-    kind: SyntaxErrorKind,
+#[derive(Clone, Copy, Debug, Error, Serialize)]
+#[error("at {at} - {item}")]
+pub struct Located<E> {
+    #[serde(flatten)]
+    pub at: Location,
+    #[source]
+    pub item: E,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Location {
+    #[serde(skip)]
+    pub offset: usize,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Error)]
-pub enum SyntaxErrorKind {
+pub enum SyntaxError {
     #[error("expected {:?}", util::maybe_ascii(.0))]
     Expected(&'static [u8]),
     #[error("unexpected characters")]
@@ -29,26 +41,43 @@ pub enum SyntaxErrorKind {
     Custom(Cow<'static, str>),
 }
 
-impl From<&'static str> for SyntaxErrorKind {
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}:{}", self.line, self.column)
+    }
+}
+
+impl From<&'static str> for SyntaxError {
     fn from(error: &'static str) -> Self {
-        SyntaxErrorKind::Custom(error.into())
+        SyntaxError::Custom(error.into())
     }
 }
 
-impl From<String> for SyntaxErrorKind {
+impl From<String> for SyntaxError {
     fn from(error: String) -> Self {
-        SyntaxErrorKind::Custom(error.into())
+        SyntaxError::Custom(error.into())
     }
 }
 
-impl SyntaxErrorKind {
-    pub fn custom(error: impl Into<Cow<'static, str>>) -> Self {
-        Custom(error.into())
+impl<E> Located<E> {
+    pub fn new(at: Location, error: impl Into<E>) -> Self {
+        Located { at, item: error.into() }
     }
 
-    pub fn at(self, byte: usize) -> SyntaxError {
-        SyntaxError { byte, kind: self }
+    pub fn map<T>(self, f: impl FnOnce(E) -> T) -> Located<T> {
+        Located {
+            at: self.at,
+            item: f(self.item),
+        }
     }
+}
+
+impl Location {
+    pub const ZERO: Location = Location {
+        offset: 0,
+        line: 1,
+        column: 1,
+    };
 }
 
 pub trait Parse<'a>: Sized {
@@ -57,13 +86,16 @@ pub trait Parse<'a>: Sized {
 
 #[derive(Clone, Copy)]
 pub struct Buffer<'a> {
-    offset: usize,
+    location: Location,
     data: &'a [u8],
 }
 
 impl<'a> Buffer<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Buffer { offset: 0, data }
+        Buffer {
+            location: Location { offset: 0, line: 1, column: 1 },
+            data,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -74,18 +106,24 @@ impl<'a> Buffer<'a> {
         self.data.is_empty()
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset
+    pub fn location(&self) -> Location {
+        self.location
     }
 
-    pub fn error<T>(&self, kind: impl Into<SyntaxErrorKind>) -> Result<T> {
-        Err(kind.into().at(self.offset))
+    pub fn error<T>(&self, kind: impl Into<SyntaxError>) -> Result<T> {
+        Err(Located::new(self.location, kind))
     }
 
     /// Advance this slice by `number` positions
     pub fn advance(&mut self, number: usize) {
+        self.location.offset += number;
+        self.location.line += memmem::find_iter(&self.data[..number], b"\r\n").count();
+        self.location.column = match memmem::rfind(&self.data[..number], b"\r\n") {
+            Some(index) => number - index + 1,
+            None => self.location.column + number,
+        };
+
         self.data = &self.data[number..];
-        self.offset += number;
     }
 
     pub fn take(&mut self, number: usize) -> &'a [u8] {
@@ -135,15 +173,13 @@ impl<'a> Buffer<'a> {
     /// Return longest prefix whose characters match `test`, advancing this
     /// slice by its length
     pub fn take_while(&mut self, mut test: impl FnMut(u8, usize) -> bool) -> &'a [u8] {
-        let mut offset = 0;
+        let mut length = 0;
 
-        while offset < self.len() && test(self.data[offset], offset) {
-            offset += 1;
+        while length < self.len() && test(self.data[length], length) {
+            length += 1;
         }
 
-        let result = &self.data[..offset];
-        self.advance(offset);
-        result
+        self.take(length)
     }
 
     pub fn take_matching(&mut self, f: impl FnOnce(&mut Self) -> Result<()>) -> Result<&'a [u8]> {
@@ -207,7 +243,7 @@ where
             buf.error(format!("expected at least {} digit{}", min_digits,
                 if min_digits == 1 { "" } else { "s" }))
         } else {
-            T::try_from(value).map_err(|err| Custom(err.to_string().into()).at(buf.offset))
+            T::try_from(value).map_err(|err| Located::new(buf.location, err.to_string()))
         }
     })
 }

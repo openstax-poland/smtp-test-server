@@ -11,7 +11,7 @@ mod multipart;
 pub mod encoding;
 pub mod syntax;
 
-use crate::{mime::encoding::Charset, util};
+use crate::{mime::encoding::Charset, util, syntax::{Located, SyntaxError}, state::Errors};
 
 pub use self::{
     multipart::{Multipart, MultipartKind},
@@ -33,7 +33,7 @@ pub enum EntityData {
 }
 
 pub struct Unparsed<'a> {
-    pub data: &'a [u8],
+    pub data: Located<&'a [u8]>,
     pub version: MimeVersion,
     pub content_type: syntax::ContentType<'a>,
     pub transfer_encoding: Option<TransferEncoding>,
@@ -49,16 +49,20 @@ pub enum Error {
     TransferEncoding(#[from] self::encoding::DecodeError),
     #[error(transparent)]
     Charset(#[from] self::encoding::CharsetError),
-    #[error("Content-Type: multipart - {0}")]
-    Multipart(#[from] multipart::Error),
+    #[error("in multipart - {0}")]
+    Multipart(#[from] multipart::ParseError),
+    #[error(transparent)]
+    Syntax(#[from] Located<SyntaxError>),
 }
 
 impl<'a> Unparsed<'a> {
-    pub fn parse(self) -> Result<Entity, Error> {
+    pub fn parse(self, errors: &mut Errors) -> Result<Entity, Error> {
         let data = match self.transfer_encoding {
-            Some(encoding) => Cow::from(encoding.decode(self.data)?),
-            None => Cow::from(self.data),
+            Some(encoding) => encoding.decode(self.data.item)?,
+            None => Cow::from(self.data.item),
         };
+
+        let mut errors = errors.nested(self.data.at);
 
         match_ignore_ascii_case! { self.content_type.type_;
             "text" => {
@@ -102,7 +106,7 @@ impl<'a> Unparsed<'a> {
                 }),
             },
 
-            "multipart" => multipart::parse(self),
+            "multipart" => multipart::parse(self, &mut errors),
 
             _ => Err(Error::UnsupportedContentType),
         }

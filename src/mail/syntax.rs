@@ -214,7 +214,7 @@ impl<'a> Folded<'a> {
             buf.maybe(|buf| {
                 let word = encoded_word(buf)?
                     .decode()
-                    .map_err(|_| SyntaxErrorKind::custom("").at(buf.offset()))?;
+                    .map_err(|_| Located::new(buf.location(), ""))?;
                 result.push_str(&word);
                 Ok(())
             });
@@ -332,13 +332,13 @@ pub fn day_name(buf: &mut Buffer) -> Result<Weekday> {
 pub fn date(buf: &mut Buffer) -> Result<Date> {
     // date = day month year
     buf.atomic(|buf| {
-        let offset = buf.offset();
+        let location = buf.location();
         let day = day(buf)?;
         let month = month(buf)?;
         let year = year(buf)?;
 
         Date::from_calendar_date(year, month, day)
-            .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
+            .map_err(|err| Located::new(location, err.to_string()))
     })
 }
 
@@ -427,7 +427,7 @@ pub fn time(buf: &mut Buffer) -> Result<AnyTime> {
 pub fn time_of_day(buf: &mut Buffer) -> Result<Time> {
     // time-of-day = hour ":" minute [ ":" second ]
     buf.atomic(|buf| {
-        let offset = buf.offset();
+        let location = buf.location();
         let hour = hour(buf)?;
         buf.expect(b":")?;
         let minute = minute(buf)?;
@@ -437,7 +437,7 @@ pub fn time_of_day(buf: &mut Buffer) -> Result<Time> {
         }).unwrap_or(0);
 
         Time::from_hms(hour, minute, second)
-            .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
+            .map_err(|err| Located::new(location, err.to_string()))
     })
 }
 
@@ -465,7 +465,7 @@ pub fn zone(buf: &mut Buffer) -> Result<Option<UtcOffset>> {
             return buf.error("expected tieme zone");
         }
 
-        let offset = buf.offset();
+        let location = buf.location();
         let positive = match buf[0] {
             b'+' => true,
             b'-' => false,
@@ -483,7 +483,7 @@ pub fn zone(buf: &mut Buffer) -> Result<Option<UtcOffset>> {
             let seconds = if positive { seconds } else { -seconds };
             UtcOffset::from_whole_seconds(seconds)
                 .map(Some)
-                .map_err(|err| SyntaxErrorKind::custom(err.to_string()).at(offset))
+                .map_err(|err| Located::new(location, err.to_string()))
         }
     })
 }
@@ -850,6 +850,16 @@ pub fn field<'a>(buf: &mut Buffer<'a>) -> Result<Header<'a>> {
         buf.expect(b"\r\n")?;
 
         Ok(header)
+    })
+}
+
+pub fn optional_field<'a>(buf: &mut Buffer<'a>) -> Result<(&'a str, Folded<'a>)> {
+    buf.atomic(|buf| {
+        let name = field_name(buf)?;
+        buf.expect(b":")?;
+        let body = unstructured(buf)?;
+        buf.expect(b"\r\n")?;
+        Ok((name, body))
     })
 }
 
