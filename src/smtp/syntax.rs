@@ -250,8 +250,11 @@ pub fn address_ipv4(buf: &mut Buffer) -> Result<Ipv4Addr> {
     // Snum                 = 1*3DIGIT
     buf.atomic(|buf| {
         let a = read_number(buf, 10, 1, 3)?;
+        buf.expect(b".")?;
         let b = read_number(buf, 10, 1, 3)?;
+        buf.expect(b".")?;
         let c = read_number(buf, 10, 1, 3)?;
+        buf.expect(b".")?;
         let d = read_number(buf, 10, 1, 3)?;
         Ok(Ipv4Addr::new(a, b, c, d))
     })
